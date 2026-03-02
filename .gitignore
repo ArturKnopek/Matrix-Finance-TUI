@@ -1,0 +1,22 @@
+# Bazy danych i pliki kopii zapasowych (NIGDY TEGO NIE UDOSTĘPNIAMY)
+*.db
+*.sqlite
+*.sqlite3
+data/
+reports/
+*.matrix
+
+# Pliki systemowe i tymczasowe Pythona
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Konfiguracja edytora (PyCharm)
+.idea/
+
+# Skompilowane pliki (jeśli zrobisz .exe)
+build/
+dist/
+*.spec
