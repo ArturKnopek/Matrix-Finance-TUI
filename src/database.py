@@ -15,7 +15,7 @@ PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUTH_DB = str(PROJECT_ROOT / "auth.db")  # logowanie + ustawienia globalne
 DATA_DIR = PROJECT_ROOT / "data"  # bazy użytkowników: data/<user_id>.db
-
+USER_SCHEMA_VERSION = 2
 _ACTIVE_USER_DB: str | None = None
 
 
@@ -71,6 +71,256 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")  # Zabezpiecza relacje
     return conn
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,)
+    )
+    return cur.fetchone() is not None
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    cur = conn.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cur.fetchall())
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    if not _column_exists(conn, table, column):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
+def _get_setting_from_conn(conn: sqlite3.Connection, key: str, default: str = "0") -> str:
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cur.fetchone()
+    if row is None:
+        return default
+    if isinstance(row, sqlite3.Row):
+        return row["value"]
+    return row[0]
+
+
+def _set_setting_in_conn(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, str(value)),
+    )
+
+
+def ensure_user_schema(conn: sqlite3.Connection, start_card: float = 0.0, start_cash: float = 0.0) -> None:
+    """
+    PATCH 0:
+    - wprowadza wersjonowanie schematu,
+    - rozszerza tabelę accounts,
+    - rozszerza piggy_banks pod aktywa / brak limitu,
+    - dodaje kolumny techniczne pod przyszłe transfery i auto-oszczędzanie,
+    - zachowuje kompatybilność ze starym UI.
+    """
+    cur = conn.cursor()
+
+    # settings musi istnieć zanim zapiszemy schema_version
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    # --- ACCOUNTS: rozszerzenie pod wiele kont ---
+    _ensure_column(conn, "accounts", "currency", "TEXT NOT NULL DEFAULT 'PLN'")
+    _ensure_column(conn, "accounts", "account_kind", "TEXT NOT NULL DEFAULT 'wallet'")
+    _ensure_column(conn, "accounts", "sort_order", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "accounts", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "accounts", "include_in_reports", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "accounts", "include_in_net_worth", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "accounts", "created_at", "TEXT")
+    _ensure_column(conn, "accounts", "updated_at", "TEXT")
+
+    now_iso = datetime.now().isoformat(timespec="seconds")
+
+    conn.execute("UPDATE accounts SET currency='PLN' WHERE currency IS NULL OR TRIM(currency) = ''")
+    conn.execute("UPDATE accounts SET account_kind='wallet' WHERE account_kind IS NULL OR TRIM(account_kind) = ''")
+    conn.execute("UPDATE accounts SET is_active=1 WHERE is_active IS NULL")
+    conn.execute("UPDATE accounts SET include_in_reports=1 WHERE include_in_reports IS NULL")
+    conn.execute("UPDATE accounts SET include_in_net_worth=1 WHERE include_in_net_worth IS NULL")
+    conn.execute("UPDATE accounts SET created_at=? WHERE created_at IS NULL OR TRIM(created_at) = ''", (now_iso,))
+    conn.execute("UPDATE accounts SET updated_at=? WHERE updated_at IS NULL OR TRIM(updated_at) = ''", (now_iso,))
+
+    # Bezpieczne zasianie domyślnych kont, jeśli DB jest nowa / pusta
+    cur.execute("SELECT COUNT(*) FROM accounts")
+    count_accounts = cur.fetchone()[0]
+    if count_accounts == 0:
+        cur.execute("""
+            INSERT INTO accounts
+            (name, balance, currency, account_kind, sort_order, is_active, include_in_reports, include_in_net_worth, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, 1, 1, ?, ?)
+        """, ("Karta", float(start_card or 0.0), "PLN", "card", 10, now_iso, now_iso))
+        cur.execute("""
+            INSERT INTO accounts
+            (name, balance, currency, account_kind, sort_order, is_active, include_in_reports, include_in_net_worth, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, 1, 1, ?, ?)
+        """, ("Gotówka", float(start_cash or 0.0), "PLN", "cash", 20, now_iso, now_iso))
+
+    # --- PIGGY BANKS / AKTYWA ---
+    _ensure_column(conn, "piggy_banks", "currency", "TEXT NOT NULL DEFAULT 'PLN'")
+    _ensure_column(conn, "piggy_banks", "bucket_type", "TEXT NOT NULL DEFAULT 'piggy_bank'")
+    _ensure_column(conn, "piggy_banks", "is_active", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "piggy_banks", "include_in_net_worth", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "piggy_banks", "notes", "TEXT")
+
+    conn.execute("UPDATE piggy_banks SET currency='PLN' WHERE currency IS NULL OR TRIM(currency) = ''")
+    conn.execute("UPDATE piggy_banks SET bucket_type='piggy_bank' WHERE bucket_type IS NULL OR TRIM(bucket_type) = ''")
+    conn.execute("UPDATE piggy_banks SET is_active=1 WHERE is_active IS NULL")
+    conn.execute("UPDATE piggy_banks SET include_in_net_worth=1 WHERE include_in_net_worth IS NULL")
+
+    # --- TRANSAKCJE / ARCHIWUM: techniczne kolumny pod transfery i autosave ---
+    _ensure_column(conn, "transactions", "entry_subtype", "TEXT NOT NULL DEFAULT 'regular'")
+    _ensure_column(conn, "transactions", "linked_group_id", "TEXT")
+    _ensure_column(conn, "archive", "entry_subtype", "TEXT NOT NULL DEFAULT 'regular'")
+    _ensure_column(conn, "archive", "linked_group_id", "TEXT")
+
+    # --- CYKLICZNE: start pod pauzę / autooszczędzanie ---
+    _ensure_column(conn, "recurring_payments", "entry_subtype", "TEXT NOT NULL DEFAULT 'regular'")
+    _ensure_column(conn, "recurring_payments", "pause_until", "TEXT")
+    _ensure_column(conn, "recurring_payments", "starts_paused", "INTEGER NOT NULL DEFAULT 0")
+
+    # --- METADATA SCHEMATU ---
+    _set_setting_in_conn(conn, "schema_version", USER_SCHEMA_VERSION)
+    _set_setting_in_conn(conn, "schema_updated_at", now_iso)
+    conn.commit()
+
+
+def get_schema_version() -> int:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM settings WHERE key = 'schema_version'")
+        row = cur.fetchone()
+        if not row:
+            return 1
+        raw = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+        try:
+            return int(raw)
+        except Exception:
+            return 1
+    finally:
+        conn.close()
+
+
+def get_all_accounts_data(active_only: bool = False):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        query = "SELECT * FROM accounts"
+        if active_only:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY sort_order ASC, name ASC"
+        cur.execute(query)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_account_names(active_only: bool = True) -> List[str]:
+    rows = get_all_accounts_data(active_only=active_only)
+    return [row["name"] for row in rows]
+
+
+def get_account_options(active_only: bool = True) -> List[Tuple[str, str]]:
+    rows = get_all_accounts_data(active_only=active_only)
+    if not rows:
+        return [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+
+    out: List[Tuple[str, str]] = []
+    for row in rows:
+        label = row["name"]
+        if row["currency"] and row["currency"] != "PLN":
+            label = f"{row['name']} ({row['currency']})"
+        out.append((label, row["name"]))
+    return out
+
+
+def add_account(
+    name: str,
+    opening_balance: float = 0.0,
+    currency: str = "PLN",
+    account_kind: str = "wallet",
+    include_in_reports: bool = True,
+    include_in_net_worth: bool = True,
+) -> Tuple[bool, str]:
+    name = (name or "").strip()
+    currency = (currency or "PLN").strip().upper()
+    account_kind = (account_kind or "wallet").strip()
+
+    if not name:
+        return False, "Podaj nazwę konta."
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(MAX(sort_order), 0) + 10 FROM accounts")
+        next_order = cur.fetchone()[0] or 10
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        cur.execute("""
+            INSERT INTO accounts
+            (name, balance, currency, account_kind, sort_order, is_active, include_in_reports, include_in_net_worth, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """, (
+            name,
+            float(opening_balance or 0.0),
+            currency,
+            account_kind,
+            int(next_order),
+            1 if include_in_reports else 0,
+            1 if include_in_net_worth else 0,
+            now_iso,
+            now_iso,
+        ))
+        conn.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        return False, "Konto o tej nazwie już istnieje."
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def update_account_name_everywhere(old_name: str, new_name: str) -> Tuple[bool, str]:
+    old_name = (old_name or "").strip()
+    new_name = (new_name or "").strip()
+
+    if not old_name or not new_name:
+        return False, "Niepoprawna nazwa konta."
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        conn.execute("BEGIN IMMEDIATE")
+
+        cur.execute("UPDATE accounts SET name=?, updated_at=? WHERE name=?", (
+            new_name,
+            datetime.now().isoformat(timespec="seconds"),
+            old_name,
+        ))
+        cur.execute("UPDATE transactions SET account_type=? WHERE account_type=?", (new_name, old_name))
+        cur.execute("UPDATE archive SET account_type=? WHERE account_type=?", (new_name, old_name))
+        cur.execute("UPDATE piggy_banks SET account_type=? WHERE account_type=?", (new_name, old_name))
+        cur.execute("UPDATE recurring_payments SET account_type=? WHERE account_type=?", (new_name, old_name))
+
+        conn.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False, "Konto o tej nazwie już istnieje."
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
 
 # ==============================================================================
 # INIT AUTH DB (users + global settings)
@@ -355,7 +605,7 @@ def init_user_db(db_path: str, start_card: float = 0.0, start_cash: float = 0.0)
         if cur.fetchone()[0] == 0:
             cur.execute("INSERT INTO accounts (name, balance) VALUES ('Karta', ?)", (float(start_card),))
             cur.execute("INSERT INTO accounts (name, balance) VALUES ('Gotówka', ?)", (float(start_cash),))
-
+        ensure_user_schema(conn, start_card=start_card, start_cash=start_cash)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -371,18 +621,6 @@ def init_user_db(db_path: str, start_card: float = 0.0, start_cash: float = 0.0)
 # ==============================================================================
 # MIGRACJE KOLUMN
 # ==============================================================================
-
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    cur = conn.cursor()
-    cur.execute(f"PRAGMA table_info({table})")
-    return any(row[1] == column for row in cur.fetchall())
-
-
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    if not _column_exists(conn, table, column):
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-
-
 def _code(prefix: str, n: int) -> str:
     return f"{prefix}{int(n):06d}"
 
@@ -884,9 +1122,39 @@ def get_category_spent(category_name: str, month_str: str) -> float:
         conn.close()
 
 
+
 # ==============================================================================
 # SKARBONKI
 # ==============================================================================
+
+def ensure_internal_category(conn: sqlite3.Connection, name: str = "Oszczędności", limit_amount: float = 0.0) -> str:
+    """
+    Upewnia się, że techniczna kategoria istnieje.
+    Zwraca nazwę kategorii, której można bezpiecznie użyć przy zapisie transakcji.
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM categories WHERE name = ?", (name,))
+    row = cur.fetchone()
+    if row:
+        return row["name"] if isinstance(row, sqlite3.Row) else row[1]
+
+    cur.execute(
+        "INSERT INTO categories (name, limit_amount) VALUES (?, ?)",
+        (name, float(limit_amount or 0.0)),
+    )
+    new_id = cur.lastrowid
+
+    # Jeśli system kodów kategorii już działa, uzupełniamy ct_code
+    try:
+        cur.execute(
+            "UPDATE categories SET ct_code = ? WHERE id = ?",
+            (_code("CT", int(new_id)), int(new_id)),
+        )
+    except Exception:
+        pass
+
+    return name
+
 
 def get_all_piggy_banks():
     conn = get_connection()
@@ -951,44 +1219,96 @@ def delete_piggy_bank(p_id: int) -> None:
         conn.close()
 
 
-def update_piggy_bank_balance(p_id: int, amount_change: float, selected_account: str,
-                              is_registered: bool = True) -> None:
+def update_piggy_bank_balance(
+    p_id: int,
+    amount_change: float,
+    selected_account: str,
+    is_registered: bool = True
+) -> None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT current_amount, name FROM piggy_banks WHERE id = ?", (p_id,))
-        row = cursor.fetchone()
-        if not row: raise Exception("Nie znaleziono skarbonki o podanym ID")
+        conn.execute("BEGIN IMMEDIATE")
 
-        current_piggy_amount = float(row["current_amount"] or 0.0)
+        # 1) Pobierz skarbonkę
+        cursor.execute(
+            "SELECT id, name, current_amount FROM piggy_banks WHERE id = ?",
+            (p_id,)
+        )
+        piggy = cursor.fetchone()
+        if not piggy:
+            raise Exception("Nie znaleziono skarbonki o podanym ID")
 
-        # FIX BŁĄD 1 - Zabezpieczenie przed ujemną skarbonką
-        if amount_change < 0 and abs(amount_change) > current_piggy_amount:
-            raise ValueError("BŁĄD: Nie możesz wypłacić więcej, niż aktualnie jest w skarbonce!")
+        piggy_name = piggy["name"] if isinstance(piggy, sqlite3.Row) else piggy[1]
+        current_amount = float(piggy["current_amount"] if isinstance(piggy, sqlite3.Row) else piggy[2])
 
-        new_piggy_amount = current_piggy_amount + float(amount_change)
-        cursor.execute("UPDATE piggy_banks SET current_amount = ? WHERE id = ?", (new_piggy_amount, p_id))
+        # 2) Sprawdź konto źródłowe/docelowe
+        cursor.execute("SELECT balance FROM accounts WHERE name = ?", (selected_account,))
+        acc_row = cursor.fetchone()
+        if not acc_row:
+            raise Exception(f"Nie znaleziono konta: {selected_account}")
 
+        account_balance = float(acc_row["balance"] if isinstance(acc_row, sqlite3.Row) else acc_row[0])
+
+        amount_change = float(amount_change or 0.0)
+        if amount_change == 0:
+            raise Exception("Kwota operacji nie może być równa zero")
+
+        # 3) Walidacje biznesowe
+        # Wpłata na skarbonkę: konto musi mieć środki
+        if amount_change > 0 and account_balance < amount_change:
+            raise Exception("Brak środków na wybranym koncie")
+
+        # Wypłata ze skarbonki: skarbonka musi mieć środki
+        if amount_change < 0 and current_amount < abs(amount_change):
+            raise Exception("Brak środków w skarbonce")
+
+        # 4) Zadbaj o techniczną kategorię dla operacji skarbonki
+        savings_category = ensure_internal_category(conn, "Oszczędności", 0.0)
+
+        # 5) Aktualizacja sald
+        # skarbonka rośnie przy wpłacie, maleje przy wypłacie
+        cursor.execute(
+            "UPDATE piggy_banks SET current_amount = current_amount + ? WHERE id = ?",
+            (amount_change, p_id)
+        )
+
+        # konto maleje przy wpłacie, rośnie przy wypłacie
+        cursor.execute(
+            "UPDATE accounts SET balance = balance - ? WHERE name = ?",
+            (amount_change, selected_account)
+        )
+
+        # 6) Rejestracja w historii (legacy-compatible)
         if is_registered:
-            account_change = -float(amount_change)
-            cursor.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?",
-                           (account_change, selected_account))
+            today = datetime.now().strftime("%Y-%m-%d")
 
-            t_type = "Wydatek" if amount_change > 0 else "Dochód"
-            action = "Wpłata" if amount_change > 0 else "Wypłata"
-            desc = f"Skarbonka: {row['name']} ({action})"
-            date_now = datetime.now().strftime("%Y-%m-%d")
+            if amount_change > 0:
+                tx_type = "Wydatek"
+                tx_desc = f"Wpłata na skarbonkę: {piggy_name}"
+            else:
+                tx_type = "Dochód"
+                tx_desc = f"Wypłata ze skarbonki: {piggy_name}"
 
-            _insert_transaction_row(conn, date_now, t_type, "Oszczędności", selected_account, "System",
-                                    abs(float(amount_change)), desc, 1)
+            _insert_transaction_row(
+                conn=conn,
+                date=today,
+                t_type=tx_type,
+                category=savings_category,
+                account=selected_account,
+                shop=piggy_name,
+                amount=abs(amount_change),
+                desc=tx_desc,
+                is_reg=1,
+            )
 
         conn.commit()
+
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-
 
 # ==============================================================================
 # CYKLICZNE

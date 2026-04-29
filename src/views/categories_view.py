@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.widgets import Label
+from textual.widgets import Label, DataTable
 from textual.containers import Container, Horizontal
 from textual.events import Resize
 from rich.text import Text
@@ -63,7 +63,26 @@ class CategoriesView(Container):
         )
 
     def on_mount(self) -> None:
-        self.load_data()
+        self.call_after_refresh(self._focus_table_safe)
+
+    def on_show(self) -> None:
+        self.call_after_refresh(self._focus_table_safe)
+
+    def _focus_table_safe(self) -> None:
+        """
+        Po wejściu na zakładkę Kategorie ustaw fokus na tabeli,
+        żeby nie trzeba było klikać myszką.
+        """
+        try:
+            self.query_one(DataTable).focus()
+            return
+        except Exception:
+            pass
+
+        try:
+            self.query_one(SmartTable).query_one(DataTable).focus()
+        except Exception:
+            pass
 
     def load_data(self) -> None:
         self.fetch_fresh_data()

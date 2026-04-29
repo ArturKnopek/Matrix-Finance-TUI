@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.widgets import Input, Select, Label, Checkbox
 
-from src.database import get_unique_categories
+from src.database import get_unique_categories, get_account_options
 
 
 class TransactionFormView(Container):
@@ -45,10 +45,10 @@ class TransactionFormView(Container):
             with Horizontal(classes="form-row"):
                 yield Label("Konto:", classes="row-label")
                 yield Select(
-                    [("Karta", "Karta"), ("Gotówka", "Gotówka")],
-                    value="Karta",
+                    [],
+                    prompt="Wybierz konto...",
                     id="input-account",
-                    allow_blank=False,
+                    allow_blank=True,
                     classes="row-select",
                 )
 
@@ -85,6 +85,7 @@ class TransactionFormView(Container):
 
     def on_mount(self) -> None:
         self._load_categories()
+        self._load_accounts()
 
         # Fokus na dacie (lub kwocie, jeśli wolisz)
         try:
@@ -95,6 +96,26 @@ class TransactionFormView(Container):
     # ---------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------
+
+    def _load_accounts(self) -> None:
+        sel = self.query_one("#input-account", Select)
+        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        sel.set_options(options)
+        if options and sel.value in (None, Select.BLANK):
+            sel.value = options[0][1]
+
+    def _ensure_account_exists(self, account_name: str) -> None:
+        if not account_name:
+            return
+        sel = self.query_one("#input-account", Select)
+        options = get_account_options() or []
+        values = {value for _, value in options}
+        if account_name not in values:
+            options.append((account_name, account_name))
+        sel.set_options(options)
+        sel.value = account_name
+
+
 
     def _load_categories(self) -> None:
         """Ładuje opcje kategorii do Select."""
@@ -142,7 +163,7 @@ class TransactionFormView(Container):
 
         self.query_one("#input-date", Input).value = ""
         self.query_one("#input-type", Select).value = "Wydatek"
-        self.query_one("#input-account", Select).value = "Karta"
+        self._load_accounts()
         self.query_one("#input-amount", Input).value = ""
         self.query_one("#input-shop", Input).value = ""
         self.query_one("#input-desc", Input).value = ""
@@ -169,8 +190,8 @@ class TransactionFormView(Container):
         self.query_one("#input-type", Select).value = data["type"]
 
         # Konto (account_type) - teraz .get() zadziała poprawnie
-        acc = data["account_type"] if data.get("account_type") else "Karta"
-        self.query_one("#input-account", Select).value = acc
+        acc = data["account_type"] if data.get("account_type") else ""
+        self._ensure_account_exists(acc or "Karta")
 
         # Kwota
         self.query_one("#input-amount", Input).value = f"{float(data['amount']):.2f}"

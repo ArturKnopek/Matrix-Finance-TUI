@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from src.database import get_account_options
 from typing import Optional, Tuple, Dict, Any
 
 from textual.app import ComposeResult
@@ -33,16 +33,18 @@ class PiggyBankFormView(VerticalScroll):
         with Horizontal(classes="form-row"):
             yield Label("Konto domyślne:", classes="row-label")
             yield Select(
-                [("Karta", "Karta"), ("Gotówka", "Gotówka")],
-                value="Karta",
+                [],
+                prompt="Wybierz konto...",
                 id="piggy-input-account",
-                allow_blank=False,
+                allow_blank=True,
                 classes="row-select",
             )
 
     def on_mount(self) -> None:
         """Focus od razu na nazwie."""
+        self._load_accounts()
         try:
+
             self.query_one("#piggy-input-name", Input).focus()
         except Exception:
             pass
@@ -57,7 +59,7 @@ class PiggyBankFormView(VerticalScroll):
 
         self.query_one("#piggy-input-name", Input).value = ""
         self.query_one("#piggy-input-target", Input).value = ""
-        self.query_one("#piggy-input-account", Select).value = "Karta"
+        self._load_accounts()
 
         try:
             self.query_one("#piggy-input-name", Input).focus()
@@ -74,6 +76,7 @@ class PiggyBankFormView(VerticalScroll):
         self.query_one("#piggy-input-name", Input).value = d.get("name", "") or ""
         self.query_one("#piggy-input-target", Input).value = f"{float(d.get('target_amount', 0.0) or 0.0):.2f}"
 
+        self._load_accounts()
         acc = d.get("account_type") or "Karta"
         self.query_one("#piggy-input-account", Select).value = acc
 
@@ -105,3 +108,10 @@ class PiggyBankFormView(VerticalScroll):
         account = self.query_one("#piggy-input-account", Select).value
 
         return {"name": name, "target": target, "account": account}, None
+
+    def _load_accounts(self) -> None:
+        sel = self.query_one("#piggy-input-account", Select)
+        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        sel.set_options(options)
+        if options and sel.value in (None, Select.BLANK):
+            sel.value = options[0][1]

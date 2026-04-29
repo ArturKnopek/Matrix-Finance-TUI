@@ -7,7 +7,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll, Container
 from textual.widgets import Input, Select, Label, Checkbox
 
-from src.database import get_unique_categories, get_all_piggy_banks
+from src.database import get_unique_categories, get_all_piggy_banks, get_account_options
 
 
 class RecurringFormView(VerticalScroll):
@@ -76,10 +76,10 @@ class RecurringFormView(VerticalScroll):
         with Horizontal(classes="form-row"):
             yield Label("Z konta:", classes="row-label")
             yield Select(
-                [("Karta", "Karta"), ("Gotówka", "Gotówka")],
-                value="Karta",
+                [],
+                prompt="Wybierz konto...",
                 id="rec-input-account",
-                allow_blank=False,
+                allow_blank=True,
                 classes="row-select",
             )
 
@@ -117,7 +117,7 @@ class RecurringFormView(VerticalScroll):
     def on_mount(self) -> None:
         # Układ startowy: domyślnie kategoria widoczna, skarbonka ukryta
         self._set_type_visibility("Wydatek")
-
+        self._load_accounts()
         # Załaduj opcje (kategorie i skarbonki) po renderze
         self.refresh_options()
 
@@ -166,7 +166,7 @@ class RecurringFormView(VerticalScroll):
         self.query_one("#rec-input-type", Select).value = "Wydatek"
         self.query_one("#rec-input-name", Input).value = ""
         self.query_one("#rec-input-amount", Input).value = ""
-        self.query_one("#rec-input-account", Select).value = "Karta"
+        self._load_accounts()
         self.query_one("#rec-input-cycle", Select).value = "Miesięcznie"
         self.query_one("#rec-input-date", Input).value = datetime.now().strftime("%Y-%m-%d")
         self.query_one("#rec-input-registered", Checkbox).value = True
@@ -221,7 +221,7 @@ class RecurringFormView(VerticalScroll):
 
         self.query_one("#rec-input-name", Input).value = d.get("name", "") or ""
         self.query_one("#rec-input-amount", Input).value = f"{float(d.get('amount', 0.0) or 0.0):.2f}"
-
+        self._load_accounts()
         # Konto
         acc = d.get("account_type") or "Karta"
         self.query_one("#rec-input-account", Select).value = acc
@@ -295,3 +295,10 @@ class RecurringFormView(VerticalScroll):
             "is_registered": self.query_one("#rec-input-registered", Checkbox).value,
             "piggy_id": piggy_id,
         }, None
+
+    def _load_accounts(self) -> None:
+        sel = self.query_one("#rec-input-account", Select)
+        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        sel.set_options(options)
+        if options and sel.value in (None, Select.BLANK):
+            sel.value = options[0][1]

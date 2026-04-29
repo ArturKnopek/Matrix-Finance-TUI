@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Optional
+from textual.widget import Widget
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, ContentSwitcher, Label, Input, DataTable, Select
+from textual.widgets import Button, ContentSwitcher, Label, Input, DataTable, Select, Checkbox
 
 # --- WIDOKI ---
 from src.screens.modal_screen import ConfirmationModal, DeleteUserModal, ChangePasswordModal
@@ -48,8 +49,12 @@ class MainDashboard(Screen):
         ("5", "go('view-cykliczne')", "Cykliczne"),
         ("6", "go('view-raporty')", "Raporty"),
         ("7", "go('view-ustawienia')", "Ustawienia"),
-        ("up", "menu_up", "Góra"),
-        ("down", "menu_down", "Dół"),
+
+        ("tab", "nav_next", "Następny"),
+        ("shift+tab", "nav_prev", "Poprzzedni"),
+        ("enter", "nav_enter", "Wejdź / Potwierdź"),
+        ("escape", "nav_back", "Wstecz"),
+
         ("ctrl+r", "refresh_all", "Odśwież"),
         ("ctrl+l", "logout", "Wyloguj"),
         ("ctrl+q", "exit_app", "Wyjście"),
@@ -58,7 +63,6 @@ class MainDashboard(Screen):
         ("ctrl+d", "ctx_delete", "Usuń"),
         ("ctrl+p", "ctx_pause", "Pauza"),
         ("ctrl+s", "ctx_save", "Zapisz"),
-        ("escape", "ctx_cancel", "Anuluj"),
     ]
 
     MAP_BTN_TO_VIEW = {
@@ -106,41 +110,337 @@ class MainDashboard(Screen):
                 yield SettingsView(id="view-ustawienia")
 
         with Horizontal(id="footer"):
-            with Horizontal(id="footer-dynamic"): pass
+            with Horizontal(id="footer-dynamic"):
+                pass
             yield Label("", classes="footer-spacer")
             with Horizontal(id="footer-static"):
-                yield Button("\[L] WYLOGUJ", id="ft-logout", classes="footer-btn static")
-                yield Button("\[Q] WYJŚCIE", id="ft-exit", classes="footer-btn static")
+                yield Button("[L] WYLOGUJ", id="ft-logout", classes="footer-btn static")
+                yield Button("[Q] WYJŚCIE", id="ft-exit", classes="footer-btn static")
 
     async def on_mount(self) -> None:
-        if not self._ensure_logged_in(): return
+        if not self._ensure_logged_in():
+            return
+
         from src.database import sync_active_month
+
         sync_active_month()
         self.update_clock()
         self.set_interval(1, self.update_clock)
         self.call_later(self._refresh_after_login)
         await self.update_footer("view-pulpit")
 
+        # start: fokus na menu po lewej
+        self.call_after_refresh(self._focus_first_menu_button)
+
         try:
             due_count = check_due_payments_count()
             if due_count > 0:
+
                 def check_recurring_response(result):
                     is_confirmed, _ = result if result else (False, False)
-                    if not is_confirmed: return
+                    if not is_confirmed:
+                        return
                     processed = process_due_payments()
-                    self.notify(f"Przetworzono {processed} zaległych płatności!", severity="information")
+                    self.notify(
+                        f"Przetworzono {processed} zaległych płatności!",
+                        severity="information",
+                    )
                     self._refresh_after_login()
 
                 self.app.push_screen(
-                    ConfirmationModal(f"Znaleziono {due_count} zaległych płatności. Dodać je?", show_checkbox=False),
+                    ConfirmationModal(
+                        f"Znaleziono {due_count} zaległych płatności. Dodać je?",
+                        show_checkbox=False,
+                    ),
                     check_recurring_response,
                 )
         except Exception as e:
             logging.error(f"Błąd na starcie: {e}")
 
     def on_screen_resume(self) -> None:
-        if not self._ensure_logged_in(): return
+        if not self._ensure_logged_in():
+            return
         self.call_later(self._refresh_after_login)
+        self.call_after_refresh(self._focus_first_menu_button)
+
+    # =========================================================
+    # NAWIGACJA: MENU MODE / CONTENT MODE
+    # =========================================================
+
+    def _is_hidden_widget(self, widget: Widget) -> bool:
+        try:
+            if widget.styles.display == "none":
+                return True
+        except Exception:
+            pass
+
+        try:
+            if hasattr(widget, "visible") and widget.visible is False:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    def _is_footer_button(self, widget: Widget) -> bool:
+        return isinstance(widget, Button) and str(getattr(widget, "id", "") or "").startswith("ft-")
+
+    def _get_menu_buttons(self) -> list[Button]:
+        buttons: list[Button] = []
+
+        for btn_id in self.MENU_ORDER:
+            try:
+                btn = self.query_one(f"#{btn_id}", Button)
+            except Exception:
+                continue
+
+            if self._is_hidden_widget(btn):
+                continue
+
+            if getattr(btn, "disabled", False):
+                continue
+
+            buttons.append(btn)
+
+        return buttons
+
+    def _focus_first_menu_button(self) -> None:
+        buttons = self._get_menu_buttons()
+        if buttons:
+            self._mark_menu_focus(buttons[0])
+
+    def _focused_is_menu_button(self) -> bool:
+        current = self.focused
+        if not isinstance(current, Button):
+            return False
+        return current in self._get_menu_buttons()
+
+    def _get_active_view(self) -> Widget | None:
+        try:
+            switcher = self.query_one("#content-frame", ContentSwitcher)
+            current_view_id = switcher.current
+            if not current_view_id:
+                return None
+            return self.query_one(f"#{current_view_id}")
+        except Exception:
+            return None
+
+    def _get_focusable_in_active_view(self) -> list[Widget]:
+        active_view = self._get_active_view()
+        if active_view is None:
+            return []
+
+        focusables: list[Widget] = []
+
+        for widget in active_view.walk_children():
+            if not isinstance(widget, Widget):
+                continue
+
+            if not getattr(widget, "can_focus", False):
+                continue
+
+            if getattr(widget, "disabled", False):
+                continue
+
+            if self._is_hidden_widget(widget):
+                continue
+
+            focusables.append(widget)
+
+        return focusables
+
+    def _focus_current_content_primary(self) -> None:
+        """
+        Po wejściu do sekcji:
+        1. preferuj tabelę,
+        2. potem formularz (Input / Select / Checkbox),
+        3. awaryjnie pierwszy focusowalny widget sekcji.
+        """
+        active_view = self._get_active_view()
+        if active_view is None:
+            return
+
+        # 1) Preferuj tabelę
+        try:
+            table = active_view.query_one(DataTable)
+            if not self._is_hidden_widget(table):
+                table.focus()
+                return
+        except Exception:
+            pass
+
+        # 2) Preferuj kontrolki formularza
+        for widget in self._get_focusable_in_active_view():
+            if isinstance(widget, (Input, Select, Checkbox)):
+                try:
+                    widget.focus()
+                    return
+                except Exception:
+                    pass
+
+        # 3) Awaryjnie: pierwszy focusowalny widget w aktywnej sekcji
+        focusables = self._get_focusable_in_active_view()
+        if focusables:
+            try:
+                focusables[0].focus()
+            except Exception:
+                pass
+
+    def _focus_next_in_list(self, items: list[Widget]) -> None:
+        if not items:
+            return
+
+        current = self.focused
+        if current not in items:
+            items[0].focus()
+            return
+
+        idx = items.index(current)
+        items[(idx + 1) % len(items)].focus()
+
+    def _focus_prev_in_list(self, items: list[Widget]) -> None:
+        if not items:
+            return
+
+        current = self.focused
+        if current not in items:
+            items[-1].focus()
+            return
+
+        idx = items.index(current)
+        items[(idx - 1) % len(items)].focus()
+
+    def _try_press_button(self, button_id: str) -> bool:
+        try:
+            btn = self.query_one(f"#{button_id}", Button)
+        except Exception:
+            return False
+
+        if self._is_hidden_widget(btn):
+            return False
+
+        if getattr(btn, "disabled", False):
+            return False
+
+        try:
+            btn.press()
+            return True
+        except Exception:
+            return False
+
+    def _try_press_first_visible(self, button_ids: list[str]) -> bool:
+        for button_id in button_ids:
+            if self._try_press_button(button_id):
+                return True
+        return False
+
+    def action_nav_next(self) -> None:
+        """
+        TAB:
+        - na menu -> chodzi po menu
+        - w sekcji -> chodzi po elementach sekcji
+        """
+        if self._focused_is_menu_button() or self.focused is None:
+            buttons = self._get_menu_buttons()
+            if not buttons:
+                return
+
+            current = self.focused
+            if current not in buttons:
+                self._mark_menu_focus(buttons[0])
+                return
+
+            idx = buttons.index(current)
+            next_idx = (idx + 1) % len(buttons)
+            self._mark_menu_focus(buttons[next_idx])
+            return
+
+        self._focus_next_in_list(self._get_focusable_in_active_view())
+
+    def action_nav_prev(self) -> None:
+        """
+        SHIFT+TAB:
+        - na menu -> chodzi po menu
+        - w sekcji -> chodzi po elementach sekcji
+        """
+        if self._focused_is_menu_button() or self.focused is None:
+            buttons = self._get_menu_buttons()
+            if not buttons:
+                return
+
+            current = self.focused
+            if current not in buttons:
+                self._mark_menu_focus(buttons[-1])
+                return
+
+            idx = buttons.index(current)
+            prev_idx = (idx - 1) % len(buttons)
+            self._mark_menu_focus(buttons[prev_idx])
+            return
+
+        self._focus_prev_in_list(self._get_focusable_in_active_view())
+
+    def action_nav_enter(self) -> None:
+        """
+        ENTER:
+        - na menu -> wchodzi do sekcji
+        - na tabeli -> próbuje wejść w edycję
+        - na buttonie -> klika button
+        - w formularzu -> próbuje zapisać / potwierdzić
+        """
+        current = self.focused
+
+        # MENU -> wejdź do sekcji
+        if self._focused_is_menu_button():
+            try:
+                current.press()  # type: ignore[attr-defined]
+            except Exception:
+                return
+            self.call_after_refresh(self._focus_current_content_primary)
+            return
+
+        # TABELA -> spróbuj edycji
+        if isinstance(current, DataTable):
+            if self._try_press_first_visible(
+                    [
+                        "ft-edit",
+                        "ft-cat-edit",
+                        "ft-pig-edit",
+                        "ft-rec-edit",
+                    ]
+            ):
+                self.call_after_refresh(self._focus_current_content_primary)
+                return
+
+        # BUTTON -> kliknij
+        if isinstance(current, Button):
+            try:
+                current.press()
+            except Exception:
+                pass
+            self.call_after_refresh(self._focus_current_content_primary)
+            return
+
+        # FORMULARZ -> zapisz / potwierdź
+        if self._try_press_first_visible(
+                [
+                    "ft-pig-confirm",
+                    "ft-save",
+                ]
+        ):
+            self.call_after_refresh(self._focus_current_content_primary)
+
+    def action_nav_back(self) -> None:
+        """
+        ESC:
+        - jeśli jest aktywny ANULUJ -> kliknij ANULUJ
+        - w przeciwnym razie wróć do menu po lewej
+        """
+        if self._try_press_first_visible(["ft-cancel"]):
+            self.call_after_refresh(self._focus_first_menu_button)
+            return
+
+        self._focus_first_menu_button()
 
     def update_clock(self) -> None:
         self.query_one("#header-clock").update(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -149,49 +449,69 @@ class MainDashboard(Screen):
         dynamic_container = self.query_one("#footer-dynamic")
         await dynamic_container.query(".dynamic").remove()
 
-        btn_refresh = Button("\[R] ODŚWIEŻ", id="ft-refresh", classes="footer-btn dynamic")
+        btn_refresh = Button("[R] ODŚWIEŻ", id="ft-refresh", classes="footer-btn dynamic")
 
         if view_name == "view-pulpit":
-            await dynamic_container.mount(Button("\[N] SZYBKA TRANZAKCJA", id="ft-new", classes="footer-btn dynamic"),
-                                          btn_refresh)
+            await dynamic_container.mount(
+                Button("[N] SZYBKA TRANZAKCJA", id="ft-new", classes="footer-btn dynamic"),
+                btn_refresh,
+            )
         elif view_name == "view-tranzakcje":
-            await dynamic_container.mount(Button("\[N] NOWA", id="ft-new", classes="footer-btn dynamic"),
-                                          Button("\[E] EDYTUJ", id="ft-edit", classes="footer-btn dynamic"),
-                                          Button("\[D] USUŃ", id="ft-delete", classes="footer-btn dynamic"),
-                                          btn_refresh)
+            await dynamic_container.mount(
+                Button("[N] NOWA", id="ft-new", classes="footer-btn dynamic"),
+                Button("[E] EDYTUJ", id="ft-edit", classes="footer-btn dynamic"),
+                Button("[D] USUŃ", id="ft-delete", classes="footer-btn dynamic"),
+                btn_refresh,
+            )
         elif view_name == "view-nowa-tranzakcja":
-            await dynamic_container.mount(Button("\[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
-                                          Button("\[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"))
+            await dynamic_container.mount(
+                Button("[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
+                Button("[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"),
+            )
         elif view_name == "view-kategorie":
-            await dynamic_container.mount(Button("\[N] NOWA", id="ft-cat-new", classes="footer-btn dynamic"),
-                                          Button("\[E] EDYTUJ", id="ft-cat-edit", classes="footer-btn dynamic"),
-                                          Button("\[D] USUŃ", id="ft-cat-delete", classes="footer-btn dynamic"),
-                                          btn_refresh)
+            await dynamic_container.mount(
+                Button("[N] NOWA", id="ft-cat-new", classes="footer-btn dynamic"),
+                Button("[E] EDYTUJ", id="ft-cat-edit", classes="footer-btn dynamic"),
+                Button("[D] USUŃ", id="ft-cat-delete", classes="footer-btn dynamic"),
+                btn_refresh,
+            )
         elif view_name == "view-nowa-kategoria":
-            await dynamic_container.mount(Button("\[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
-                                          Button("\[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"))
+            await dynamic_container.mount(
+                Button("[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
+                Button("[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"),
+            )
         elif view_name == "view-skarbonki":
-            await dynamic_container.mount(Button("\[N] NOWY", id="ft-pig-new", classes="footer-btn dynamic"),
-                                          Button("\[E] EDYTUJ", id="ft-pig-edit", classes="footer-btn dynamic"),
-                                          Button("\[D] USUŃ", id="ft-pig-delete", classes="footer-btn dynamic"),
-                                          Button("\[+] WPŁAĆ", id="ft-pig-deposit", classes="footer-btn dynamic"),
-                                          Button("\[-] WYPŁAĆ", id="ft-pig-withdraw", classes="footer-btn dynamic"),
-                                          btn_refresh)
+            await dynamic_container.mount(
+                Button("[N] NOWY", id="ft-pig-new", classes="footer-btn dynamic"),
+                Button("[E] EDYTUJ", id="ft-pig-edit", classes="footer-btn dynamic"),
+                Button("[D] USUŃ", id="ft-pig-delete", classes="footer-btn dynamic"),
+                Button("[+] WPŁAĆ", id="ft-pig-deposit", classes="footer-btn dynamic"),
+                Button("[-] WYPŁAĆ", id="ft-pig-withdraw", classes="footer-btn dynamic"),
+                btn_refresh,
+            )
         elif view_name == "view-nowa-skarbonka":
-            await dynamic_container.mount(Button("\[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
-                                          Button("\[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"))
+            await dynamic_container.mount(
+                Button("[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
+                Button("[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"),
+            )
         elif view_name == "view-op-skarbonka":
-            await dynamic_container.mount(Button("\[S] ZATWIERDŹ", id="ft-pig-confirm", classes="footer-btn dynamic"),
-                                          Button("\[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"))
+            await dynamic_container.mount(
+                Button("[S] ZATWIERDŹ", id="ft-pig-confirm", classes="footer-btn dynamic"),
+                Button("[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"),
+            )
         elif view_name == "view-cykliczne":
-            await dynamic_container.mount(Button("\[N] NOWA", id="ft-rec-new", classes="footer-btn dynamic"),
-                                          Button("\[E] EDYTUJ", id="ft-rec-edit", classes="footer-btn dynamic"),
-                                          Button("\[D] USUŃ", id="ft-rec-delete", classes="footer-btn dynamic"),
-                                          Button("\[P] PAUZA", id="ft-rec-pause", classes="footer-btn dynamic"),
-                                          btn_refresh)
+            await dynamic_container.mount(
+                Button("[N] NOWA", id="ft-rec-new", classes="footer-btn dynamic"),
+                Button("[E] EDYTUJ", id="ft-rec-edit", classes="footer-btn dynamic"),
+                Button("[D] USUŃ", id="ft-rec-delete", classes="footer-btn dynamic"),
+                Button("[P] PAUZA", id="ft-rec-pause", classes="footer-btn dynamic"),
+                btn_refresh,
+            )
         elif view_name == "view-nowe-cykliczne":
-            await dynamic_container.mount(Button("\[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
-                                          Button("\[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"))
+            await dynamic_container.mount(
+                Button("[S] ZAPISZ", id="ft-save", classes="footer-btn dynamic"),
+                Button("[ESC] ANULUJ", id="ft-cancel", classes="footer-btn dynamic"),
+            )
         else:
             await dynamic_container.mount(btn_refresh)
 
@@ -208,7 +528,8 @@ class MainDashboard(Screen):
 
     def _strip_shortcut(self, text: str) -> str:
         text = (text or "").strip()
-        if text.startswith("[") and "]" in text: return text.split("]", 1)[1].strip()
+        if text.startswith("[") and "]" in text:
+            return text.split("]", 1)[1].strip()
         return text
 
     def _set_header(self, text: str) -> None:
@@ -224,25 +545,35 @@ class MainDashboard(Screen):
     def _active_sidebar_index(self) -> int:
         for i, bid in enumerate(self.MENU_ORDER):
             try:
-                if "active" in self.query_one(f"#{bid}").classes: return i
+                if "active" in self.query_one(f"#{bid}").classes:
+                    return i
             except Exception:
                 pass
         return 0
 
     async def _go_view(self, view_name: str, header: Optional[str] = None) -> None:
         self.query_one("#content-frame").current = view_name
-        if header: self._set_header(header)
+        if header:
+            self._set_header(header)
         await self.update_footer(view_name)
 
     def _refresh_after_login(self) -> None:
-        for vid in ("#view-pulpit", "#view-tranzakcje", "#view-kategorie", "#view-skarbonki", "#view-cykliczne",
-                    "#view-raporty", "#view-ustawienia"):
+        for vid in (
+                "#view-pulpit",
+                "#view-tranzakcje",
+                "#view-kategorie",
+                "#view-skarbonki",
+                "#view-cykliczne",
+                "#view-raporty",
+                "#view-ustawienia",
+        ):
             self._safe_load(vid)
 
     def _ensure_logged_in(self) -> bool:
         if not getattr(self.app, "current_user_id", None):
             self.notify("Sesja wygasła.", severity="warning")
-            if hasattr(self.app, "clear_session"): self.app.clear_session()
+            if hasattr(self.app, "clear_session"):
+                self.app.clear_session()
             self.app.switch_screen("login")
             return False
         return True
@@ -265,8 +596,13 @@ class MainDashboard(Screen):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         v = self._current_view()
-        forms = ("view-nowa-tranzakcja", "view-nowa-kategoria", "view-nowa-skarbonka", "view-op-skarbonka",
-                 "view-nowe-cykliczne")
+        forms = (
+            "view-nowa-tranzakcja",
+            "view-nowa-kategoria",
+            "view-nowa-skarbonka",
+            "view-op-skarbonka",
+            "view-nowe-cykliczne",
+        )
         if v in forms:
             btn_id = "ft-pig-confirm" if v == "view-op-skarbonka" else "ft-save"
             self.run_worker(self._handle_action(btn_id), exclusive=True)
@@ -292,9 +628,17 @@ class MainDashboard(Screen):
 
     def _trigger_sidebar_button(self, btn_id: str) -> None:
         target_view = self.MAP_BTN_TO_VIEW.get(btn_id)
-        if not target_view: return
+        if not target_view:
+            return
 
         self._set_active_sidebar(btn_id)
+
+        try:
+            btn = self.query_one(f"#{btn_id}", Button)
+            self._mark_menu_focus(btn)
+        except Exception:
+            pass
+
         try:
             self._set_header(f"{self.query_one(f'#{btn_id}', Button).label.plain.upper()} GŁÓWNY")
         except Exception:
@@ -302,11 +646,6 @@ class MainDashboard(Screen):
 
         self.query_one("#content-frame").current = target_view
         self._safe_load(f"#{target_view}")
-
-        try:
-            self.query_one(f"#{target_view}").focus()
-        except Exception:
-            pass
 
         self.run_worker(self.update_footer(target_view), exclusive=True)
 
@@ -340,25 +679,54 @@ class MainDashboard(Screen):
     def _ctx_map(self, action: str) -> str:
         v = self._current_view()
         if action in ("save", "cancel"):
-            if v in ("view-nowa-tranzakcja", "view-nowa-kategoria", "view-nowa-skarbonka",
-                     "view-nowe-cykliczne"): return "ft-save" if action == "save" else "ft-cancel"
-            if v == "view-op-skarbonka": return "ft-pig-confirm" if action == "save" else "ft-cancel"
+            if v in (
+                    "view-nowa-tranzakcja",
+                    "view-nowa-kategoria",
+                    "view-nowa-skarbonka",
+                    "view-nowe-cykliczne",
+            ):
+                return "ft-save" if action == "save" else "ft-cancel"
+            if v == "view-op-skarbonka":
+                return "ft-pig-confirm" if action == "save" else "ft-cancel"
             return ""
-        if action == "new": return {"view-tranzakcje": "ft-new", "view-kategorie": "ft-cat-new",
-                                    "view-skarbonki": "ft-pig-new", "view-cykliczne": "ft-rec-new",
-                                    "view-pulpit": "ft-new"}.get(v, "")
-        if action == "edit": return {"view-tranzakcje": "ft-edit", "view-kategorie": "ft-cat-edit",
-                                     "view-skarbonki": "ft-pig-edit", "view-cykliczne": "ft-rec-edit"}.get(v, "")
-        if action == "delete": return {"view-tranzakcje": "ft-delete", "view-kategorie": "ft-cat-delete",
-                                       "view-skarbonki": "ft-pig-delete", "view-cykliczne": "ft-rec-delete"}.get(v, "")
-        if action == "pause" and v == "view-cykliczne": return "ft-rec-pause"
+
+        if action == "new":
+            return {
+                "view-tranzakcje": "ft-new",
+                "view-kategorie": "ft-cat-new",
+                "view-skarbonki": "ft-pig-new",
+                "view-cykliczne": "ft-rec-new",
+                "view-pulpit": "ft-new",
+            }.get(v, "")
+
+        if action == "edit":
+            return {
+                "view-tranzakcje": "ft-edit",
+                "view-kategorie": "ft-cat-edit",
+                "view-skarbonki": "ft-pig-edit",
+                "view-cykliczne": "ft-rec-edit",
+            }.get(v, "")
+
+        if action == "delete":
+            return {
+                "view-tranzakcje": "ft-delete",
+                "view-kategorie": "ft-cat-delete",
+                "view-skarbonki": "ft-pig-delete",
+                "view-cykliczne": "ft-rec-delete",
+            }.get(v, "")
+
+        if action == "pause" and v == "view-cykliczne":
+            return "ft-rec-pause"
+
         return ""
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         await self._handle_action(event.button.id, event.button)
 
     async def _handle_action(self, btn_id: str, btn_obj: Optional[Button] = None) -> None:
-        if not btn_id: return
+        if not btn_id:
+            return
+
         current_view = self._current_view()
 
         if btn_id in self.MAP_BTN_TO_VIEW:
@@ -380,12 +748,16 @@ class MainDashboard(Screen):
                 if not t_id:
                     self.notify("Zaznacz transakcję!", severity="warning")
                     return
+
                 data = get_transaction_by_id(int(t_id))
                 if data:
                     form = self.query_one("#view-nowa-tranzakcja")
                     form.reset_form()
                     form.load_existing_data(data)
-                    await self._go_view("view-nowa-tranzakcja", f"EDYCJA {self._tx_code_from_id(t_id)}")
+                    await self._go_view(
+                        "view-nowa-tranzakcja",
+                        f"EDYCJA {self._tx_code_from_id(t_id)}",
+                    )
                     self.query_one("#input-date").focus()
             except Exception as e:
                 logging.error(f"Błąd edycji: {e}")
@@ -396,13 +768,17 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-tranzakcje")
                 t_id = view.get_selected_transaction_id()
-                if not t_id: return self.notify("Zaznacz transakcję!", severity="warning")
+                if not t_id:
+                    return self.notify("Zaznacz transakcję!", severity="warning")
+
                 tx_code = self._tx_code_from_id(t_id)
 
                 def do_delete_trans(result):
                     is_confirmed, dont_ask = result if result else (False, False)
-                    if not is_confirmed: return
-                    if dont_ask: set_setting("skip_delete_confirm", "1")
+                    if not is_confirmed:
+                        return
+                    if dont_ask:
+                        set_setting("skip_delete_confirm", "1")
                     delete_transaction(int(t_id))
                     self.notify(f"Usunięto transakcję {tx_code}!")
                     self._refresh_after_login()
@@ -410,7 +786,10 @@ class MainDashboard(Screen):
                 if get_setting("skip_delete_confirm") == "1":
                     do_delete_trans((True, False))
                 else:
-                    self.app.push_screen(ConfirmationModal(f"Usunąć {tx_code}?", True), do_delete_trans)
+                    self.app.push_screen(
+                        ConfirmationModal(f"Usunąć {tx_code}?", True),
+                        do_delete_trans,
+                    )
             except Exception as e:
                 logging.error(f"Błąd usuwania transakcji: {e}")
             return
@@ -427,13 +806,18 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-kategorie")
                 c_id = view.get_selected_category_id()
-                if not c_id: return self.notify("Zaznacz kategorię!", severity="warning")
+                if not c_id:
+                    return self.notify("Zaznacz kategorię!", severity="warning")
+
                 data = get_category_by_id(int(c_id))
                 if data:
                     form = self.query_one("#view-nowa-kategoria")
                     form.reset_form()
                     form.load_existing_data(data)
-                    await self._go_view("view-nowa-kategoria", f"EDYCJA {self._ct_code_from_id(c_id)}")
+                    await self._go_view(
+                        "view-nowa-kategoria",
+                        f"EDYCJA {self._ct_code_from_id(c_id)}",
+                    )
                     self.query_one("#cat-input-name").focus()
             except Exception as e:
                 logging.error(f"Błąd edycji kat: {e}")
@@ -444,13 +828,17 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-kategorie")
                 c_id = view.get_selected_category_id()
-                if not c_id: return self.notify("Zaznacz kategorię!", severity="warning")
+                if not c_id:
+                    return self.notify("Zaznacz kategorię!", severity="warning")
+
                 ct_code = self._ct_code_from_id(c_id)
 
                 def do_delete_cat(result):
                     is_confirmed, dont_ask = result if result else (False, False)
-                    if not is_confirmed: return
-                    if dont_ask: set_setting("skip_delete_confirm", "1")
+                    if not is_confirmed:
+                        return
+                    if dont_ask:
+                        set_setting("skip_delete_confirm", "1")
                     delete_category(int(c_id))
                     self.notify(f"Usunięto kategorię {ct_code}!")
                     self._safe_load("#view-kategorie")
@@ -458,7 +846,10 @@ class MainDashboard(Screen):
                 if get_setting("skip_delete_confirm") == "1":
                     do_delete_cat((True, False))
                 else:
-                    self.app.push_screen(ConfirmationModal(f"Usunąć kategorię {ct_code}?", True), do_delete_cat)
+                    self.app.push_screen(
+                        ConfirmationModal(f"Usunąć kategorię {ct_code}?", True),
+                        do_delete_cat,
+                    )
             except Exception as e:
                 logging.error(f"Błąd usuwania kat: {e}")
             return
@@ -475,13 +866,18 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-skarbonki")
                 p_id = view.get_selected_piggy_id()
-                if not p_id: return self.notify("Wybierz cel!", severity="warning")
+                if not p_id:
+                    return self.notify("Wybierz cel!", severity="warning")
+
                 data = get_piggy_bank_by_id(int(p_id))
                 if data:
                     form = self.query_one("#view-nowa-skarbonka")
                     form.reset_form()
                     form.load_existing_data(data)
-                    await self._go_view("view-nowa-skarbonka", f"EDYCJA {self._pb_code_from_id(p_id)}")
+                    await self._go_view(
+                        "view-nowa-skarbonka",
+                        f"EDYCJA {self._pb_code_from_id(p_id)}",
+                    )
                     self.query_one("#piggy-input-name").focus()
             except Exception as e:
                 logging.error(f"Błąd edycji piggy: {e}")
@@ -492,10 +888,13 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-skarbonki")
                 p_id = view.get_selected_piggy_id()
-                if not p_id: return self.notify("Wybierz skarbonkę!", severity="warning")
+                if not p_id:
+                    return self.notify("Wybierz skarbonkę!", severity="warning")
+
                 data = get_piggy_bank_by_id(p_id)
                 p_name = data["name"] if data else "Nieznany cel"
                 op_type = "deposit" if btn_id == "ft-pig-deposit" else "withdraw"
+
                 op_view = self.query_one("#view-op-skarbonka")
                 op_view.setup_operation(p_id, p_name, op_type)
                 await self._go_view("view-op-skarbonka", "OPERACJA FINANSOWA")
@@ -509,10 +908,12 @@ class MainDashboard(Screen):
             try:
                 op_view = self.query_one("#view-op-skarbonka")
                 amount, account, is_reg = op_view.get_data()
-                if amount is None: return self.notify("Podaj poprawną kwotę!", severity="error")
-                final_change = amount if op_view.operation_type == "deposit" else -amount
+                if amount is None:
+                    return self.notify("Podaj poprawną kwotę!", severity="error")
 
+                final_change = amount if op_view.operation_type == "deposit" else -amount
                 update_piggy_bank_balance(op_view.target_piggy_id, final_change, account, is_reg)
+
                 self.notify("Operacja udana!" if is_reg else "Zaktualizowano stan skarbonki.")
                 self._refresh_after_login()
                 await self._go_view("view-skarbonki", "SKARBONKI GŁÓWNY")
@@ -525,13 +926,17 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-skarbonki")
                 p_id = view.get_selected_piggy_id()
-                if not p_id: return self.notify("Zaznacz cel!", severity="warning")
+                if not p_id:
+                    return self.notify("Zaznacz cel!", severity="warning")
+
                 pb_code = self._pb_code_from_id(p_id)
 
                 def do_delete_piggy(result):
                     is_confirmed, dont_ask = result if result else (False, False)
-                    if not is_confirmed: return
-                    if dont_ask: set_setting("skip_delete_confirm", "1")
+                    if not is_confirmed:
+                        return
+                    if dont_ask:
+                        set_setting("skip_delete_confirm", "1")
                     delete_piggy_bank(int(p_id))
                     self.notify(f"Usunięto cel {pb_code}!")
                     self._safe_load("#view-skarbonki")
@@ -539,7 +944,10 @@ class MainDashboard(Screen):
                 if get_setting("skip_delete_confirm") == "1":
                     do_delete_piggy((True, False))
                 else:
-                    self.app.push_screen(ConfirmationModal(f"Usunąć {pb_code}?", True), do_delete_piggy)
+                    self.app.push_screen(
+                        ConfirmationModal(f"Usunąć {pb_code}?", True),
+                        do_delete_piggy,
+                    )
             except Exception as e:
                 logging.error(f"Błąd usunięcia piggy: {e}")
             return
@@ -556,12 +964,17 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-cykliczne")
                 r_id = view.get_selected_recurring_id()
-                if not r_id: return self.notify("Zaznacz płatność!", severity="warning")
+                if not r_id:
+                    return self.notify("Zaznacz płatność!", severity="warning")
+
                 data = get_recurring_by_id(int(r_id))
                 if data:
                     form = self.query_one("#view-nowe-cykliczne")
                     form.load_existing_data(data)
-                    await self._go_view("view-nowe-cykliczne", f"EDYCJA {self._rr_code_from_id(r_id)}")
+                    await self._go_view(
+                        "view-nowe-cykliczne",
+                        f"EDYCJA {self._rr_code_from_id(r_id)}",
+                    )
                     self.query_one("#rec-input-type").focus()
             except Exception as e:
                 logging.error(f"Błąd edycji rec: {e}")
@@ -572,9 +985,13 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-cykliczne")
                 r_id = view.get_selected_recurring_id()
-                if not r_id: return self.notify("Zaznacz płatność!", severity="warning")
+                if not r_id:
+                    return self.notify("Zaznacz płatność!", severity="warning")
+
                 new_status = toggle_recurring_pause(int(r_id))
-                self.notify(f"{self._rr_code_from_id(r_id)} → status: {'AKTYWNA' if new_status else 'WSTRZYMANA'}")
+                self.notify(
+                    f"{self._rr_code_from_id(r_id)} → status: {'AKTYWNA' if new_status else 'WSTRZYMANA'}"
+                )
                 view.load_data()
             except Exception as e:
                 logging.error(f"Błąd pauzy rec: {e}")
@@ -585,22 +1002,30 @@ class MainDashboard(Screen):
             try:
                 view = self.query_one("#view-cykliczne")
                 r_id = view.get_selected_recurring_id()
-                if not r_id: return self.notify("Zaznacz płatność!", severity="warning")
+                if not r_id:
+                    return self.notify("Zaznacz płatność!", severity="warning")
+
                 rr_code = self._rr_code_from_id(r_id)
 
                 def do_delete_rec(result):
                     is_confirmed, dont_ask = result if result else (False, False)
-                    if not is_confirmed: return
-                    if dont_ask: set_setting("skip_delete_confirm", "1")
+                    if not is_confirmed:
+                        return
+                    if dont_ask:
+                        set_setting("skip_delete_confirm", "1")
                     ok, msg = delete_recurring(int(r_id))
-                    if not ok: return self.notify(f"Błąd: {msg}", severity="error")
+                    if not ok:
+                        return self.notify(f"Błąd: {msg}", severity="error")
                     self.notify(f"Usunięto {rr_code}!")
                     view.load_data()
 
                 if get_setting("skip_delete_confirm") == "1":
                     do_delete_rec((True, False))
                 else:
-                    self.app.push_screen(ConfirmationModal(f"Usunąć {rr_code}?", True), do_delete_rec)
+                    self.app.push_screen(
+                        ConfirmationModal(f"Usunąć {rr_code}?", True),
+                        do_delete_rec,
+                    )
             except Exception as e:
                 logging.error(f"Błąd usuwania rec: {e}")
             return
@@ -611,15 +1036,33 @@ class MainDashboard(Screen):
                 if current_view == "view-nowa-tranzakcja":
                     form = self.query_one("#view-nowa-tranzakcja")
                     data, error = form.get_data_and_validate()
-                    if error: return self.notify(error, severity="error")
+                    if error:
+                        return self.notify(error, severity="error")
 
                     if form.editing_id:
-                        update_transaction(form.editing_id, data["date"], data["type"], data["category"],
-                                           data["account"], data["shop"], data["amount"], data["desc"], data["is_reg"])
+                        update_transaction(
+                            form.editing_id,
+                            data["date"],
+                            data["type"],
+                            data["category"],
+                            data["account"],
+                            data["shop"],
+                            data["amount"],
+                            data["desc"],
+                            data["is_reg"],
+                        )
                         self.notify(f"Zaktualizowano {self._tx_code_from_id(form.editing_id)}!")
                     else:
-                        add_transaction(data["date"], data["type"], data["category"], data["account"], data["shop"],
-                                        data["amount"], data["desc"], data["is_reg"])
+                        add_transaction(
+                            data["date"],
+                            data["type"],
+                            data["category"],
+                            data["account"],
+                            data["shop"],
+                            data["amount"],
+                            data["desc"],
+                            data["is_reg"],
+                        )
                         self.notify("Dodano nową transakcję!")
 
                     self._refresh_after_login()
@@ -628,49 +1071,86 @@ class MainDashboard(Screen):
                 elif current_view == "view-nowa-kategoria":
                     form = self.query_one("#view-nowa-kategoria")
                     data, error = form.get_data_and_validate()
-                    if error: return self.notify(error, severity="error")
+                    if error:
+                        return self.notify(error, severity="error")
+
                     if form.editing_id:
                         success, msg = update_category(form.editing_id, data["name"], data["limit"])
-                        if not success: return self.notify(msg, severity="error")
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify(f"Zaktualizowano {self._ct_code_from_id(form.editing_id)}!")
                     else:
                         success, msg = add_category(data["name"], data["limit"])
-                        if not success: return self.notify(msg, severity="error")
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify("Dodano nową kategorię!")
+
                     self._safe_load("#view-kategorie")
                     await self._go_view("view-kategorie", "KATEGORIE GŁÓWNY")
 
                 elif current_view == "view-nowa-skarbonka":
                     form = self.query_one("#view-nowa-skarbonka")
                     data, error = form.get_data_and_validate()
-                    if error: return self.notify(error, severity="error")
+                    if error:
+                        return self.notify(error, severity="error")
+
                     if form.editing_id:
-                        success, msg = update_piggy_bank(form.editing_id, data["name"], data["target"], data["account"])
-                        if not success: return self.notify(msg, severity="error")
+                        success, msg = update_piggy_bank(
+                            form.editing_id,
+                            data["name"],
+                            data["target"],
+                            data["account"],
+                        )
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify(f"Zaktualizowano {self._pb_code_from_id(form.editing_id)}!")
                     else:
                         success, msg = add_piggy_bank(data["name"], data["target"], data["account"])
-                        if not success: return self.notify(msg, severity="error")
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify("Dodano nowy cel!")
+
                     self._safe_load("#view-skarbonki")
                     await self._go_view("view-skarbonki", "SKARBONKI GŁÓWNY")
 
                 elif current_view == "view-nowe-cykliczne":
                     form = self.query_one("#view-nowe-cykliczne")
                     data, error = form.get_data_and_validate()
-                    if error: return self.notify(error, severity="error")
+                    if error:
+                        return self.notify(error, severity="error")
+
                     if form.editing_id:
-                        success, msg = update_recurring(form.editing_id, data["name"], data["amount"], data["type"],
-                                                        data["category"], data["account"], data["cycle"],
-                                                        data["start_date"], data["is_registered"], data["piggy_id"])
-                        if not success: return self.notify(msg, severity="error")
+                        success, msg = update_recurring(
+                            form.editing_id,
+                            data["name"],
+                            data["amount"],
+                            data["type"],
+                            data["category"],
+                            data["account"],
+                            data["cycle"],
+                            data["start_date"],
+                            data["is_registered"],
+                            data["piggy_id"],
+                        )
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify(f"Zaktualizowano {self._rr_code_from_id(form.editing_id)}!")
                     else:
-                        success, msg = add_recurring(data["name"], data["amount"], data["type"], data["category"],
-                                                     data["account"], data["cycle"], data["start_date"],
-                                                     data["is_registered"], data["piggy_id"])
-                        if not success: return self.notify(msg, severity="error")
+                        success, msg = add_recurring(
+                            data["name"],
+                            data["amount"],
+                            data["type"],
+                            data["category"],
+                            data["account"],
+                            data["cycle"],
+                            data["start_date"],
+                            data["is_registered"],
+                            data["piggy_id"],
+                        )
+                        if not success:
+                            return self.notify(msg, severity="error")
                         self.notify("Dodano płatność cykliczną!")
+
                     self._safe_load("#view-cykliczne")
                     await self._go_view("view-cykliczne", "PŁATNOŚCI CYKLICZNE")
 
@@ -693,16 +1173,22 @@ class MainDashboard(Screen):
             return
 
         # ================== SYSTEM I RAPORTY ==================
-        if btn_id == "ft-exit": self.app.exit(); return
+        if btn_id == "ft-exit":
+            self.app.exit()
+            return
+
         if btn_id == "ft-logout":
-            if hasattr(self.app, "clear_session"): self.app.clear_session()
+            if hasattr(self.app, "clear_session"):
+                self.app.clear_session()
             self.app.switch_screen("login")
             return
+
         if btn_id == "ft-refresh":
             self.notify("Odświeżanie...")
             try:
                 count = process_due_payments()
-                if count > 0: self.notify(f"Przetworzono {count} cyklicznych!", severity="information")
+                if count > 0:
+                    self.notify(f"Przetworzono {count} cyklicznych!", severity="information")
             except Exception as e:
                 logging.error(f"Błąd manualnego odświeżania: {e}")
             self._refresh_after_login()
@@ -754,8 +1240,10 @@ class MainDashboard(Screen):
                     if result:
                         self._safe_load("#view-ustawienia")
 
-                self.app.push_screen(DeleteUserModal(str(sel_user_id), target_username, cu_name, cu_id),
-                                     on_user_deleted)
+                self.app.push_screen(
+                    DeleteUserModal(str(sel_user_id), target_username, cu_name, cu_id),
+                    on_user_deleted,
+                )
             except Exception as e:
                 logging.error(f"Błąd wywoływania modalu usuwania usera: {e}")
             return
@@ -764,7 +1252,8 @@ class MainDashboard(Screen):
             try:
                 cu_id = getattr(self.app, "current_user_id", None)
                 cu_name = getattr(self.app, "current_username", None)
-                if not cu_id: return
+                if not cu_id:
+                    return
                 self.app.push_screen(ChangePasswordModal(cu_name, cu_id))
             except Exception as e:
                 logging.error(f"Błąd wywoływania modalu zmiany hasła: {e}")
@@ -782,6 +1271,7 @@ class MainDashboard(Screen):
                 logging.error(f"Błąd zmiany salda: {e}")
                 self.notify("Błąd kwoty!", severity="error")
             return
+
         if btn_id == "btn-export-backup":
             try:
                 cu_name = getattr(self.app, "current_username", "")
@@ -789,21 +1279,47 @@ class MainDashboard(Screen):
             except Exception as e:
                 logging.error(f"Błąd modalu eksportu: {e}")
             return
-        # Opcjonalny przycisk resetu bazy (dodany dla kompletności Ustawień)
+
         if btn_id == "btn-reset-db":
             try:
                 def confirm_reset(result):
                     is_confirmed, _ = result if result else (False, False)
-                    if not is_confirmed: return
+                    if not is_confirmed:
+                        return
                     reset_user_db_hard()
                     self.notify("Baza danych zresetowana!", severity="warning")
                     self._refresh_after_login()
 
                 self.app.push_screen(
-                    ConfirmationModal("CZY NA PEWNO CHCESZ ZRESETOWAĆ DANE? (Wszystkie transakcje znikną!)",
-                                      show_checkbox=False),
-                    confirm_reset
+                    ConfirmationModal(
+                        "CZY NA PEWNO CHCESZ ZRESETOWAĆ DANE? (Wszystkie transakcje znikną!)",
+                        show_checkbox=False,
+                    ),
+                    confirm_reset,
                 )
             except Exception as e:
                 logging.error(f"Błąd wywoływania modalu resetowania bazy: {e}")
             return
+
+    def _clear_menu_focus_marker(self) -> None:
+        for btn in self._get_menu_buttons():
+            try:
+                btn.remove_class("kbd-focus")
+            except Exception:
+                pass
+
+    def _mark_menu_focus(self, btn: Button) -> None:
+        self._clear_menu_focus_marker()
+        try:
+            btn.add_class("kbd-focus")
+            btn.focus()
+        except Exception:
+            pass
+
+    def _focus_menu_index(self, idx: int) -> None:
+        buttons = self._get_menu_buttons()
+        if not buttons:
+            return
+
+        idx = max(0, min(idx, len(buttons) - 1))
+        self._mark_menu_focus(buttons[idx])

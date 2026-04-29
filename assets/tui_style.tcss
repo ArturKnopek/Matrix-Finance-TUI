@@ -144,11 +144,20 @@ MainDashboard {
     border: none;
     background: #000000;
     color: #00FF41;
-    text-align: center;
+    text-align: left;
+    padding-left: 1;
     margin-bottom: 1;
 }
 
-.sidebar-btn:hover { background: #1a1a1a; color: white; }
+.sidebar-btn:hover {
+    background: #1a1a1a;
+    color: white;
+}
+.sidebar-btn:focus {
+    background: #00FF41;
+    color: #000000;
+    text-style: bold;
+}
 
 .sidebar-btn.active {
     background: #111111;
@@ -156,6 +165,13 @@ MainDashboard {
     text-style: bold;
     border: none;
 }
+
+.sidebar-btn.active.kbd-focus {
+    background: #ffffff;
+    color: #000000;
+    text-style: bold;
+}
+
 
 #right-panel {
     width: 100%;

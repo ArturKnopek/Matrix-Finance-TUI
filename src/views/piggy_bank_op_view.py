@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, Tuple
-
+from src.database import get_account_options
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.widgets import Input, Select, Label, Checkbox
@@ -41,10 +41,10 @@ class PiggyBankOperationView(VerticalScroll):
         with Horizontal(classes="form-row"):
             yield Label("Konto:", classes="row-label")
             yield Select(
-                [("Karta", "Karta"), ("Gotówka", "Gotówka")],
-                value="Karta",
+                [],
+                prompt="Wybierz konto...",
                 id="pig-op-account",
-                allow_blank=False,
+                allow_blank=True,
                 classes="row-select",
             )
 
@@ -62,6 +62,7 @@ class PiggyBankOperationView(VerticalScroll):
 
     def on_mount(self) -> None:
         # Fokus na kwotę
+        self._load_accounts()
         try:
             self.query_one("#pig-op-amount", Input).focus()
         except Exception:
@@ -97,7 +98,7 @@ class PiggyBankOperationView(VerticalScroll):
     def _apply_setup(self, p_id: str, p_name: str, op_type: str) -> None:
         """Ustawia tytuł, nazwę celu i resetuje pola."""
         title = "WPŁATA NA CEL" if op_type == "deposit" else "WYPŁATA Z CELU"
-
+        self._load_accounts()
         try:
             self.query_one("#pig-op-header", Label).update(title)
             self.query_one("#pig-op-target", Input).value = p_name
@@ -134,3 +135,10 @@ class PiggyBankOperationView(VerticalScroll):
             return None, None, None
 
         return amount, acc, is_reg
+
+    def _load_accounts(self) -> None:
+        sel = self.query_one("#pig-op-account", Select)
+        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        sel.set_options(options)
+        if options and sel.value in (None, Select.BLANK):
+            sel.value = options[0][1]
