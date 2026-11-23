@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 import calendar
-from datetime import datetime, timedelta
+import logging
+import tempfile
+import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -62,6 +65,11 @@ def get_auth_connection() -> sqlite3.Connection:
     return conn
 
 
+def _py_lower(value: Any) -> Any:
+    """lower() z obsługą polskich znaków (SQLite LOWER działa tylko dla ASCII)."""
+    return value.lower() if isinstance(value, str) else value
+
+
 def get_connection() -> sqlite3.Connection:
     """Połączenie do aktywnej bazy użytkownika (data/<user_id>.db)."""
     conn = sqlite3.connect(get_active_user_db(), timeout=10)
@@ -69,6 +77,7 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")  # Zabezpiecza relacje
+    conn.create_function("py_lower", 1, _py_lower, deterministic=True)
     return conn
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -147,6 +156,12 @@ def ensure_user_schema(conn: sqlite3.Connection, start_card: float = 0.0, start_
     conn.execute("UPDATE accounts SET include_in_net_worth=1 WHERE include_in_net_worth IS NULL")
     conn.execute("UPDATE accounts SET created_at=? WHERE created_at IS NULL OR TRIM(created_at) = ''", (now_iso,))
     conn.execute("UPDATE accounts SET updated_at=? WHERE updated_at IS NULL OR TRIM(updated_at) = ''", (now_iso,))
+
+    # Kolejność kont: domyślnie Karta przed Gotówką (stare bazy miały sort_order = 0)
+    conn.execute("UPDATE accounts SET sort_order = 10 WHERE name = 'Karta' AND sort_order = 0")
+    conn.execute("UPDATE accounts SET sort_order = 20 WHERE name = 'Gotówka' AND sort_order = 0")
+    conn.execute("UPDATE accounts SET account_kind = 'card' WHERE name = 'Karta' AND account_kind = 'wallet'")
+    conn.execute("UPDATE accounts SET account_kind = 'cash' WHERE name = 'Gotówka' AND account_kind = 'wallet'")
 
     # Bezpieczne zasianie domyślnych kont, jeśli DB jest nowa / pusta
     cur.execute("SELECT COUNT(*) FROM accounts")
@@ -332,49 +347,28 @@ def init_auth_db() -> None:
     try:
         cur = conn.cursor()
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS settings
-                    (
-                        key
-                        TEXT
-                        PRIMARY
-                        KEY,
-                        value
-                        TEXT
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS users
-                    (
-                        id
-                        TEXT
-                        PRIMARY
-                        KEY,
-                        username
-                        TEXT
-                        UNIQUE
-                        NOT
-                        NULL,
-                        password_hash
-                        TEXT
-                        NOT
-                        NULL,
-                        created_at
-                        TEXT
-                        NOT
-                        NULL,
-                        is_active
-                        INTEGER
-                        NOT
-                        NULL
-                        DEFAULT
-                        1
-                    )
-                    """)
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('dev_mode', '0')")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('skip_delete_confirm', '0')")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('auth_enabled', '1')")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('run_wizard_on_boot', '0')")
-        cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('first_run_done', '0')")
+            CREATE TABLE IF NOT EXISTS users (
+                id            TEXT PRIMARY KEY,
+                username      TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                is_active     INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        for key, value in (
+            ("dev_mode", "0"),
+            ("skip_delete_confirm", "0"),
+            ("auth_enabled", "1"),
+            ("run_wizard_on_boot", "0"),
+            ("first_run_done", "0"),
+        ):
+            cur.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
     finally:
         conn.close()
@@ -384,219 +378,108 @@ def init_auth_db() -> None:
 # INIT USER DB (budget tables + user-local settings)
 # ==============================================================================
 
+DEFAULT_CATEGORIES: Tuple[str, ...] = (
+    "Jedzenie",
+    "Transport",
+    "Rachunki",
+    "Zdrowie",
+    "Rozrywka",
+    "Zakupy",
+    "Wynagrodzenie",
+    "Inne",
+)
+SAVINGS_CATEGORY = "Oszczędności"
+
+
 def init_user_db(db_path: str, start_card: float = 0.0, start_cash: float = 0.0) -> None:
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 8000")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA foreign_keys = ON")
 
     try:
         cur = conn.cursor()
         cur.execute("BEGIN IMMEDIATE")
-        cur.execute("PRAGMA foreign_keys = ON")
 
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS settings
-                    (
-                        key
-                        TEXT
-                        PRIMARY
-                        KEY,
-                        value
-                        TEXT
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS accounts
-                    (
-                        name
-                        TEXT
-                        PRIMARY
-                        KEY,
-                        balance
-                        REAL
-                        DEFAULT
-                        0.0
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS accounts (
+                name    TEXT PRIMARY KEY,
+                balance REAL DEFAULT 0.0
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS transactions
-                    (
-                        id
-                        INTEGER
-                        PRIMARY
-                        KEY
-                        AUTOINCREMENT,
-                        tx_uid
-                        TEXT,
-                        human_code
-                        TEXT,
-                        date
-                        TEXT
-                        NOT
-                        NULL,
-                        type
-                        TEXT
-                        DEFAULT
-                        'Wydatek',
-                        category
-                        TEXT,
-                        account_type
-                        TEXT
-                        DEFAULT
-                        'Karta',
-                        shop
-                        TEXT,
-                        amount
-                        REAL,
-                        description
-                        TEXT,
-                        is_registered
-                        INTEGER
-                        DEFAULT
-                        1,
-                        FOREIGN
-                        KEY
-                    (
-                        category
-                    ) REFERENCES categories
-                    (
-                        name
-                    ) ON DELETE SET NULL
-                      ON UPDATE CASCADE
-                        )
-                    """)
+            CREATE TABLE IF NOT EXISTS transactions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_uid        TEXT,
+                human_code    TEXT,
+                date          TEXT NOT NULL,
+                type          TEXT DEFAULT 'Wydatek',
+                category      TEXT,
+                account_type  TEXT DEFAULT 'Karta',
+                shop          TEXT,
+                amount        REAL,
+                description   TEXT,
+                is_registered INTEGER DEFAULT 1,
+                FOREIGN KEY (category) REFERENCES categories (name)
+                    ON DELETE SET NULL
+                    ON UPDATE CASCADE
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS archive
-                    (
-                        id
-                        INTEGER
-                        PRIMARY
-                        KEY,
-                        date
-                        TEXT,
-                        type
-                        TEXT,
-                        category
-                        TEXT,
-                        account_type
-                        TEXT,
-                        shop
-                        TEXT,
-                        amount
-                        REAL,
-                        description
-                        TEXT,
-                        archived_at
-                        TEXT
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS archive (
+                id           INTEGER PRIMARY KEY,
+                date         TEXT,
+                type         TEXT,
+                category     TEXT,
+                account_type TEXT,
+                shop         TEXT,
+                amount       REAL,
+                description  TEXT,
+                archived_at  TEXT
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS categories
-                    (
-                        id
-                        INTEGER
-                        PRIMARY
-                        KEY
-                        AUTOINCREMENT,
-                        ct_code
-                        TEXT,
-                        name
-                        TEXT
-                        UNIQUE
-                        NOT
-                        NULL,
-                        limit_amount
-                        REAL
-                        DEFAULT
-                        0
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS categories (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ct_code      TEXT,
+                name         TEXT UNIQUE NOT NULL,
+                limit_amount REAL DEFAULT 0
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS piggy_banks
-                    (
-                        id
-                        INTEGER
-                        PRIMARY
-                        KEY
-                        AUTOINCREMENT,
-                        pb_code
-                        TEXT,
-                        name
-                        TEXT
-                        UNIQUE
-                        NOT
-                        NULL,
-                        target_amount
-                        REAL
-                        DEFAULT
-                        0,
-                        current_amount
-                        REAL
-                        DEFAULT
-                        0,
-                        account_type
-                        TEXT
-                        DEFAULT
-                        'Karta'
-                    )
-                    """)
+            CREATE TABLE IF NOT EXISTS piggy_banks (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                pb_code        TEXT,
+                name           TEXT UNIQUE NOT NULL,
+                target_amount  REAL DEFAULT 0,
+                current_amount REAL DEFAULT 0,
+                account_type   TEXT DEFAULT 'Karta'
+            )
+        """)
         cur.execute("""
-                    CREATE TABLE IF NOT EXISTS recurring_payments
-                    (
-                        id
-                        INTEGER
-                        PRIMARY
-                        KEY
-                        AUTOINCREMENT,
-                        rr_code
-                        TEXT,
-                        name
-                        TEXT
-                        NOT
-                        NULL,
-                        amount
-                        REAL
-                        NOT
-                        NULL,
-                        type
-                        TEXT
-                        NOT
-                        NULL,
-                        category
-                        TEXT,
-                        account_type
-                        TEXT
-                        DEFAULT
-                        'Karta',
-                        cycle
-                        TEXT
-                        NOT
-                        NULL,
-                        start_date
-                        TEXT
-                        NOT
-                        NULL,
-                        last_payment_date
-                        TEXT,
-                        is_registered
-                        INTEGER
-                        DEFAULT
-                        1,
-                        piggy_id
-                        INTEGER
-                        DEFAULT
-                        NULL,
-                        FOREIGN
-                        KEY
-                    (
-                        piggy_id
-                    ) REFERENCES piggy_banks
-                    (
-                        id
-                    ) ON DELETE CASCADE
-                        )
-                    """)
+            CREATE TABLE IF NOT EXISTS recurring_payments (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                rr_code           TEXT,
+                name              TEXT NOT NULL,
+                amount            REAL NOT NULL,
+                type              TEXT NOT NULL,
+                category          TEXT,
+                account_type      TEXT DEFAULT 'Karta',
+                cycle             TEXT NOT NULL,
+                start_date        TEXT NOT NULL,
+                last_payment_date TEXT,
+                is_registered     INTEGER DEFAULT 1,
+                piggy_id          INTEGER DEFAULT NULL,
+                FOREIGN KEY (piggy_id) REFERENCES piggy_banks (id) ON DELETE CASCADE
+            )
+        """)
         cur.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES ('active_view_month', ?)",
             (datetime.now().strftime("%Y-%m"),)
@@ -606,6 +489,7 @@ def init_user_db(db_path: str, start_card: float = 0.0, start_cash: float = 0.0)
             cur.execute("INSERT INTO accounts (name, balance) VALUES ('Karta', ?)", (float(start_card),))
             cur.execute("INSERT INTO accounts (name, balance) VALUES ('Gotówka', ?)", (float(start_cash),))
         ensure_user_schema(conn, start_card=start_card, start_cash=start_cash)
+        _seed_default_categories(conn)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -616,6 +500,27 @@ def init_user_db(db_path: str, start_card: float = 0.0, start_cash: float = 0.0)
         ensure_piggy_codes(conn)
         ensure_recurring_codes(conn)
         conn.close()
+
+
+def _seed_default_categories(conn: sqlite3.Connection) -> None:
+    """
+    Zakłada domyślne kategorie tylko dla zupełnie nowej bazy (jednorazowo).
+    Jeśli użytkownik później usunie kategorie, nie odtwarzamy ich ponownie.
+    """
+    if _get_setting_from_conn(conn, "defaults_seeded", "0") == "1":
+        return
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM categories")
+    has_categories = cur.fetchone()[0] > 0
+    cur.execute("SELECT COUNT(*) FROM transactions")
+    has_transactions = cur.fetchone()[0] > 0
+    if not has_categories and not has_transactions:
+        for name in DEFAULT_CATEGORIES:
+            cur.execute("INSERT OR IGNORE INTO categories (name, limit_amount) VALUES (?, 0)", (name,))
+            new_id = cur.lastrowid
+            if new_id:
+                cur.execute("UPDATE categories SET ct_code = ? WHERE id = ?", (_code("CT", int(new_id)), int(new_id)))
+    _set_setting_in_conn(conn, "defaults_seeded", "1")
 
 
 # ==============================================================================
@@ -903,16 +808,52 @@ def _balance_delta(t_type: str, amount: float) -> float:
     return -amt if t_type == "Wydatek" else amt
 
 
+_EMPTY_CATEGORY_VALUES = {"", "---", "CLEAR", "Select.BLANK", "None"}
+
+
+def _normalize_category(conn: sqlite3.Connection, category: Any) -> Optional[str]:
+    """
+    Zwraca nazwę kategorii bezpieczną dla klucza obcego transactions.category.
+
+    - puste wartości ("", "---", BLANK) -> NULL (dochód bez kategorii),
+    - nieistniejąca kategoria -> zostaje automatycznie utworzona
+      (np. kategoria usunięta, a wciąż używana przez płatność cykliczną).
+    """
+    if category is None:
+        return None
+    name = str(category).strip()
+    if name in _EMPTY_CATEGORY_VALUES or "NoSelection" in name:
+        return None
+    return ensure_internal_category(conn, name, 0.0)
+
+
+def _require_account(conn: sqlite3.Connection, account: str) -> str:
+    """Upewnia się, że konto istnieje (inaczej saldo zmieniałoby się „w próżni”)."""
+    name = (account or "").strip()
+    row = conn.execute("SELECT name FROM accounts WHERE name = ?", (name,)).fetchone()
+    if not row:
+        raise ValueError(f"Nie znaleziono konta: {name or '(puste)'}")
+    return name
+
+
 def add_transaction(date: str, t_type: str, category: str, account: str, shop: str, amount: float, desc: str,
                     is_reg: bool) -> None:
+    """
+    Dodaje transakcję.
+
+    is_reg=True  -> transakcja trafia do historii i zmienia saldo konta,
+    is_reg=False -> zmienia tylko saldo (szybka korekta bez wpisu w historii).
+    """
     amount = float(amount or 0.0)
     delta = _balance_delta(t_type, amount)
     conn = get_connection()
     try:
         cursor = conn.cursor()
         conn.execute("BEGIN IMMEDIATE")
+        account = _require_account(conn, account)
         cursor.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (delta, account))
         if is_reg:
+            category = _normalize_category(conn, category)
             _insert_transaction_row(conn, date, t_type, category, account, shop, amount, desc, 1)
         conn.commit()
     except Exception:
@@ -936,9 +877,12 @@ def delete_transaction(t_id: int) -> None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        conn.execute("BEGIN IMMEDIATE")
         cursor.execute("SELECT * FROM transactions WHERE id = ?", (t_id,))
         row = cursor.fetchone()
-        if not row: return
+        if not row:
+            conn.rollback()
+            return
 
         if int(row["is_registered"] or 0) == 1:
             revert = -_balance_delta(row["type"], float(row["amount"] or 0.0))
@@ -958,19 +902,25 @@ def update_transaction(t_id: int, date: str, t_type: str, category: str, account
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        conn.execute("BEGIN IMMEDIATE")
         cursor.execute("SELECT * FROM transactions WHERE id = ?", (t_id,))
         old = cursor.fetchone()
-        if not old: return
+        if not old:
+            conn.rollback()
+            return
 
         new_amount = float(amount or 0.0)
         new_is_reg = 1 if is_reg else 0
+        account = _require_account(conn, account)
+        category = _normalize_category(conn, category)
 
         if int(old["is_registered"] or 0) == 1:
             revert = -_balance_delta(old["type"], float(old["amount"] or 0.0))
             cursor.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (revert, old["account_type"]))
 
         cursor.execute(
-            "UPDATE transactions SET date=?, type=?, category=?, account_type=?, shop=?, amount=?, description=?, is_registered=? WHERE id=?",
+            "UPDATE transactions SET date=?, type=?, category=?, account_type=?, shop=?, amount=?, description=?, "
+            "is_registered=? WHERE id=?",
             (date, t_type, category, account, shop, abs(new_amount), desc, new_is_reg, t_id),
         )
 
@@ -986,12 +936,48 @@ def update_transaction(t_id: int, date: str, t_type: str, category: str, account
         conn.close()
 
 
-def get_transactions_by_month(ym_str: str):
+def get_transactions_by_month(ym_str: str, include_archive: bool = False):
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM transactions WHERE date LIKE ?", (f"{ym_str}-%",))
+        if include_archive:
+            cursor.execute(
+                """
+                SELECT id, date, type, category, account_type, shop, amount, description, is_registered
+                FROM transactions WHERE date LIKE ?
+                UNION ALL
+                SELECT id, date, type, category, account_type, shop, amount, description, 1
+                FROM archive WHERE date LIKE ?
+                ORDER BY date ASC
+                """,
+                (f"{ym_str}-%", f"{ym_str}-%"),
+            )
+        else:
+            cursor.execute("SELECT * FROM transactions WHERE date LIKE ?", (f"{ym_str}-%",))
         return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def get_transaction_year_range() -> Tuple[int, int]:
+    """(najstarszy, najnowszy) rok z transakcjami (łącznie z archiwum); domyślnie bieżący."""
+    now_year = datetime.now().year
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT MIN(y), MAX(y) FROM (
+                SELECT CAST(substr(date, 1, 4) AS INTEGER) AS y FROM transactions
+                UNION ALL
+                SELECT CAST(substr(date, 1, 4) AS INTEGER) AS y FROM archive
+            )
+            """
+        ).fetchone()
+        lo = int(row[0]) if row and row[0] else now_year
+        hi = int(row[1]) if row and row[1] else now_year
+        return min(lo, now_year), max(hi, now_year)
+    except Exception:
+        return now_year, now_year
     finally:
         conn.close()
 
@@ -1014,9 +1000,14 @@ def fetch_transactions(search_text: Optional[str] = None, category_filter: Optio
             params.append(category_filter)
 
         if search_text:
-            query += " AND (shop LIKE ? OR description LIKE ?)"
-            wildcard = f"%{search_text}%"
-            params.extend([wildcard, wildcard])
+            # Szukamy bez względu na wielkość liter (również ą/ć/ę/ł/ń/ó/ś/ź/ż)
+            query += (
+                " AND (py_lower(shop) LIKE ? OR py_lower(description) LIKE ?"
+                " OR py_lower(category) LIKE ? OR py_lower(human_code) LIKE ?"
+                " OR CAST(amount AS TEXT) LIKE ?)"
+            )
+            wildcard = f"%{search_text.lower()}%"
+            params.extend([wildcard] * 5)
 
         query += " ORDER BY date DESC, id DESC"
         cursor.execute(query, params)
@@ -1069,7 +1060,7 @@ def add_category(name: str, limit_amount: float):
         conn.commit()
         return True, ""
     except sqlite3.IntegrityError:
-        return False, "Kategoria istnieje!"
+        return False, "Kategoria o tej nazwie już istnieje!"
     finally:
         conn.close()
 
@@ -1088,11 +1079,14 @@ def update_category(c_id: int, name: str, limit_amount: float):
         # Zabezpieczenie integralności transakcji przy zmianie nazwy kategorii
         if old_name != name:
             cursor.execute("UPDATE transactions SET category=? WHERE category=?", (name, old_name))
+            cursor.execute("UPDATE recurring_payments SET category=? WHERE category=?", (name, old_name))
+            cursor.execute("UPDATE archive SET category=? WHERE category=?", (name, old_name))
 
         conn.commit()
         return True, ""
     except sqlite3.IntegrityError:
-        return False, "Nazwa zajęta!"
+        conn.rollback()
+        return False, "Kategoria o tej nazwie już istnieje!"
     finally:
         conn.close()
 
@@ -1101,8 +1095,40 @@ def delete_category(c_id: int) -> None:
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT name FROM categories WHERE id = ?", (c_id,))
+        row = cursor.fetchone()
+        if row:
+            # Płatności cykliczne nie mają klucza obcego -> czyścimy ręcznie
+            cursor.execute("UPDATE recurring_payments SET category = NULL WHERE category = ?", (row["name"],))
         cursor.execute("DELETE FROM categories WHERE id = ?", (c_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_category_spending_map(month_str: str) -> Dict[str, float]:
+    """
+    Wydatki netto (wydatki - zwroty/dochody) per kategoria w danym miesiącu.
+    Jedno zapytanie zamiast N osobnych (szybsze odświeżanie widoków).
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT category,
+                   SUM(CASE WHEN type = 'Wydatek' THEN amount ELSE 0 END) -
+                   SUM(CASE WHEN type = 'Dochód' THEN amount ELSE 0 END) AS spent
+            FROM transactions
+            WHERE date LIKE ? AND category IS NOT NULL
+            GROUP BY category
+            """,
+            (f"{month_str}%",),
+        )
+        return {row["category"]: float(row["spent"] or 0.0) for row in cursor.fetchall()}
     finally:
         conn.close()
 
@@ -1188,7 +1214,7 @@ def add_piggy_bank(name: str, target: float, account_type: str):
         conn.commit()
         return True, ""
     except sqlite3.IntegrityError:
-        return False, "Istnieje!"
+        return False, "Cel o tej nazwie już istnieje!"
     finally:
         conn.close()
 
@@ -1201,13 +1227,34 @@ def update_piggy_bank(p_id: int, name: str, target: float, account_type: str):
                        (name, target, account_type, p_id))
         conn.commit()
         return True, ""
-    except Exception:
-        return False, "Błąd!"
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False, "Cel o tej nazwie już istnieje!"
+    except Exception as e:
+        conn.rollback()
+        return False, f"Błąd zapisu celu: {e}"
     finally:
         conn.close()
 
 
-def delete_piggy_bank(p_id: int) -> None:
+def delete_piggy_bank(p_id: int, refund: bool = True) -> float:
+    """
+    Usuwa cel oszczędnościowy.
+
+    Jeśli refund=True i w skarbonce są środki, najpierw wracają one na konto
+    przypisane do celu (jako zarejestrowana wypłata), żeby pieniądze nie
+    „wyparowały” z majątku. Zwraca zwróconą kwotę.
+    """
+    refunded = 0.0
+    if refund:
+        piggy = get_piggy_bank_by_id(p_id)
+        if piggy:
+            current = float(piggy["current_amount"] or 0.0)
+            account = piggy["account_type"] or "Karta"
+            if current > 0 and account in get_account_names(active_only=False):
+                update_piggy_bank_balance(p_id, -current, account, True)
+                refunded = current
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1215,8 +1262,12 @@ def delete_piggy_bank(p_id: int) -> None:
         cursor.execute("DELETE FROM recurring_payments WHERE piggy_id = ?", (p_id,))
         cursor.execute("DELETE FROM piggy_banks WHERE id = ?", (p_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+    return refunded
 
 
 def update_piggy_bank_balance(
@@ -1334,7 +1385,17 @@ def get_recurring_by_id(r_id: int):
         conn.close()
 
 
+def _clean_recurring_category(category: Any) -> Optional[str]:
+    if category is None:
+        return None
+    name = str(category).strip()
+    if name in _EMPTY_CATEGORY_VALUES or "NoSelection" in name:
+        return None
+    return name
+
+
 def add_recurring(name, amount, r_type, category, account, cycle, start_date, is_reg, piggy_id=None):
+    category = _clean_recurring_category(category)
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1353,6 +1414,7 @@ def add_recurring(name, amount, r_type, category, account, cycle, start_date, is
 
 
 def update_recurring(r_id, name, amount, r_type, category, account, cycle, start_date, is_reg, piggy_id=None):
+    category = _clean_recurring_category(category)
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1432,20 +1494,90 @@ def get_monthly_summary(year_month: str) -> Tuple[float, float]:
 
 
 def archive_month(year_month: str) -> int:
+    """
+    Przenosi transakcje danego miesiąca do tabeli archive (salda się nie zmieniają).
+    Zarchiwizowane dane nadal liczą się w podsumowaniach miesięcznych.
+    """
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        conn.execute("BEGIN IMMEDIATE")
         param = f"{year_month}%"
         cursor.execute(
-            "INSERT INTO archive (id, date, type, category, account_type, shop, amount, description, archived_at) SELECT id, date, type, category, account_type, shop, amount, description, date('now') FROM transactions WHERE date LIKE ?",
+            "INSERT OR REPLACE INTO archive "
+            "(id, date, type, category, account_type, shop, amount, description, archived_at) "
+            "SELECT id, date, type, category, account_type, shop, amount, description, date('now') "
+            "FROM transactions WHERE date LIKE ?",
             (param,))
         copied_count = cursor.rowcount
         if copied_count > 0:
             cursor.execute("DELETE FROM transactions WHERE date LIKE ?", (param,))
-            conn.commit()
-        return int(copied_count)
+        conn.commit()
+        return max(0, int(copied_count))
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def get_accounts_overview(active_only: bool = True) -> List[Dict[str, Any]]:
+    """Lista kont z saldami (do pulpitu / ustawień)."""
+    return [
+        {
+            "name": row["name"],
+            "balance": float(row["balance"] or 0.0),
+            "currency": (row["currency"] or "PLN") if "currency" in row.keys() else "PLN",
+            "include_in_net_worth": int(row["include_in_net_worth"] or 0) == 1
+            if "include_in_net_worth" in row.keys() else True,
+        }
+        for row in get_all_accounts_data(active_only=active_only)
+    ]
+
+
+def get_piggy_total() -> float:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT COALESCE(SUM(current_amount), 0) FROM piggy_banks").fetchone()
+        return float(row[0] or 0.0)
+    finally:
+        conn.close()
+
+
+def export_user_db_snapshot(dest_path: str) -> None:
+    """
+    Spójna kopia bazy użytkownika (SQLite backup API).
+    Zwykłe kopiowanie pliku w trybie WAL mogłoby pominąć ostatnie zmiany z pliku -wal.
+    """
+    src = get_connection()
+    try:
+        dst = sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode = DELETE")
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def export_encrypted_backup(out_file: str, password: str) -> bool:
+    """Tworzy spójny snapshot bazy i szyfruje go hasłem do pliku out_file."""
+    from src.utils.crypto_utils import encrypt_file
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        export_user_db_snapshot(tmp_path)
+        return encrypt_file(tmp_path, out_file, password)
+    except Exception as e:
+        logging.error(f"Błąd eksportu kopii: {e}")
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def get_daily_spending_map(year_month: str) -> Dict[int, float]:
@@ -1476,109 +1608,191 @@ def get_recurring_sum() -> float:
 # CYKLICZNE - AUTOMAT
 # ==============================================================================
 
-def replace_safe(date_obj: datetime.date, day: int):
+RECURRING_CYCLES: Tuple[str, ...] = ("Dziennie", "Tygodniowo", "Miesięcznie", "Rocznie")
+MAX_CATCHUP_OCCURRENCES = 1000  # bezpiecznik: nie generujemy w nieskończoność
+
+
+def replace_safe(date_obj: date, day: int) -> date:
     try:
         return date_obj.replace(day=day)
     except ValueError:
         return date_obj.replace(day=calendar.monthrange(date_obj.year, date_obj.month)[1])
 
 
-def check_due_payments_count() -> int:
+def _parse_iso_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _add_months(base: date, months: int, anchor_day: int) -> date:
+    """Dodaje miesiące, trzymając się dnia „kotwicy” (31 -> ostatni dzień krótszego miesiąca)."""
+    idx = base.year * 12 + (base.month - 1) + months
+    year, month0 = divmod(idx, 12)
+    month = month0 + 1
+    day = min(anchor_day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def recurring_occurrence(start: date, cycle: str, n: int) -> date:
+    """
+    n-te wystąpienie płatności liczone OD DATY STARTU (bez dryfu dat).
+    Np. start 31.01 + co miesiąc -> 28/29.02, 31.03, 30.04, 31.05...
+    """
+    if cycle == "Dziennie":
+        return start + timedelta(days=n)
+    if cycle == "Tygodniowo":
+        return start + timedelta(weeks=n)
+    if cycle == "Rocznie":
+        return _add_months(start, 12 * n, start.day)
+    return _add_months(start, n, start.day)  # "Miesięcznie" (domyślnie)
+
+
+def _first_occurrence_index_after(start: date, cycle: str, after: Optional[date]) -> int:
+    """Najmniejsze n, dla którego wystąpienie(n) > after (albo 0, gdy brak płatności)."""
+    if after is None or after < start:
+        return 0
+    if cycle == "Dziennie":
+        n = (after - start).days + 1
+    elif cycle == "Tygodniowo":
+        n = (after - start).days // 7 + 1
+    elif cycle == "Rocznie":
+        n = after.year - start.year
+    else:
+        n = (after.year - start.year) * 12 + (after.month - start.month)
+    n = max(0, n - 1)
+    while recurring_occurrence(start, cycle, n) <= after:
+        n += 1
+    return n
+
+
+def get_recurring_next_due(row: Any) -> Optional[date]:
+    """Najbliższa NIEOPŁACONA data płatności (może być w przeszłości = zaległość)."""
+    r = dict(row)
+    start = _parse_iso_date(r.get("start_date"))
+    if not start:
+        return None
+    cycle = r.get("cycle") or "Miesięcznie"
+    last = _parse_iso_date(r.get("last_payment_date"))
+    n = _first_occurrence_index_after(start, cycle, last)
+    return recurring_occurrence(start, cycle, n)
+
+
+def get_recurring_due_dates(row: Any, today: Optional[date] = None) -> List[date]:
+    """Wszystkie zaległe (<= dziś) i jeszcze nieprzetworzone daty danej płatności."""
+    r = dict(row)
+    if int(r.get("is_registered") or 0) != 1:
+        return []
+    start = _parse_iso_date(r.get("start_date"))
+    if not start:
+        return []
+    today = today or datetime.now().date()
+    cycle = r.get("cycle") or "Miesięcznie"
+    last = _parse_iso_date(r.get("last_payment_date"))
+
+    out: List[date] = []
+    n = _first_occurrence_index_after(start, cycle, last)
+    while len(out) < MAX_CATCHUP_OCCURRENCES:
+        occ = recurring_occurrence(start, cycle, n)
+        if occ > today:
+            break
+        out.append(occ)
+        n += 1
+    return out
+
+
+def check_due_payments_count(today: Optional[date] = None) -> int:
+    """Liczba zaległych WYSTĄPIEŃ płatności (np. 3 nieopłacone miesiące = 3)."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        today = datetime.now().date()
-        count = 0
-        cursor.execute("SELECT * FROM recurring_payments WHERE is_registered=1")
-        for row in cursor.fetchall():
-            try:
-                start_date = datetime.strptime(row["start_date"], "%Y-%m-%d").date()
-                if row["last_payment_date"]:
-                    last_pay = datetime.strptime(row["last_payment_date"], "%Y-%m-%d").date()
-                    if row["cycle"] == "Miesięcznie":
-                        if today >= replace_safe(today, day=start_date.day) > last_pay: count += 1
-                elif today >= start_date:
-                    count += 1
-            except Exception:
-                pass
-        return count
+        cursor.execute("SELECT * FROM recurring_payments WHERE is_registered = 1")
+        return sum(len(get_recurring_due_dates(row, today)) for row in cursor.fetchall())
     finally:
         conn.close()
+
+
+def get_upcoming_recurring(limit: int = 20, today: Optional[date] = None) -> List[Dict[str, Any]]:
+    """
+    Najbliższe płatności aktywnych zleceń posortowane po dacie.
+    Każdy element: dict z polami płatności + next_due (date) + days (int, <0 = zaległe).
+    """
+    today = today or datetime.now().date()
+    out: List[Dict[str, Any]] = []
+    for row in get_all_recurring():
+        r = dict(row)
+        if int(r.get("is_registered") or 0) != 1:
+            continue
+        nxt = get_recurring_next_due(r)
+        if nxt is None:
+            continue
+        r["next_due"] = nxt
+        r["days"] = (nxt - today).days
+        out.append(r)
+    out.sort(key=lambda x: (x["days"], x.get("name") or ""))
+    return out[:limit]
 
 
 def process_due_payments() -> int:
     return check_and_process_recurring()
 
 
-def check_and_process_recurring() -> int:
+def check_and_process_recurring(today: Optional[date] = None) -> int:
+    """
+    Księguje WSZYSTKIE zaległe wystąpienia płatności cyklicznych w jednej transakcji SQL.
+    Zwraca liczbę zaksięgowanych operacji.
+    """
+    today = today or datetime.now().date()
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        today = datetime.now().date()
-        cursor.execute("SELECT * FROM recurring_payments")
+        conn.execute("BEGIN IMMEDIATE")
+        cursor.execute("SELECT * FROM recurring_payments WHERE is_registered = 1")
+        rows = cursor.fetchall()
         processed_count = 0
 
-        for row in cursor.fetchall():
-            # FIX BŁĄD 3 - Całkowite ignorowanie płatności "zombie" (spauzowanych)
-            is_reg = int(row["is_registered"] or 0)
-            if is_reg == 0:
+        for row in rows:
+            due_dates = get_recurring_due_dates(row, today)
+            if not due_dates:
                 continue
 
-            start_date = datetime.strptime(row["start_date"], "%Y-%m-%d").date()
-            base_date = start_date
+            account = row["account_type"]
+            if not conn.execute("SELECT 1 FROM accounts WHERE name = ?", (account,)).fetchone():
+                logging.warning("Płatność %s pominięta: brak konta %s", row["name"], account)
+                continue
 
-            if row["last_payment_date"]:
-                last_pay_date = datetime.strptime(row["last_payment_date"], "%Y-%m-%d").date()
-                if last_pay_date > base_date:
-                    base_date = last_pay_date
+            amount = abs(float(row["amount"] or 0.0))
+            is_piggy = row["type"] == "Na Skarbonkę"
+            hist_type = "Wydatek" if is_piggy else row["type"]
+            category = _normalize_category(conn, SAVINGS_CATEGORY if is_piggy else row["category"])
+            change = amount if hist_type == "Dochód" else -amount
 
-            next_due = base_date
-            if not row["last_payment_date"]:
-                if today < start_date: continue
-            else:
-                cycle = row["cycle"]
-                if cycle == "Dziennie":
-                    next_due = base_date + timedelta(days=1)
-                elif cycle == "Tygodniowo":
-                    next_due = base_date + timedelta(weeks=1)
-                elif cycle == "Miesięcznie":
-                    y, m = base_date.year + (base_date.month // 12), (base_date.month % 12) + 1
-                    try:
-                        next_due = base_date.replace(year=y, month=m, day=start_date.day)
-                    except ValueError:
-                        next_due = base_date.replace(year=y, month=m, day=calendar.monthrange(y, m)[1])
-                elif cycle == "Rocznie":
-                    try:
-                        next_due = base_date.replace(year=base_date.year + 1)
-                    except ValueError:
-                        next_due = base_date.replace(year=base_date.year + 1, month=2, day=28)
+            for due in due_dates:
+                date_str = due.strftime("%Y-%m-%d")
+                _insert_transaction_row(
+                    conn, date_str, hist_type, category, account, row["name"],
+                    amount, f"[CYKLICZNE] {row['name']}", 1,
+                )
+                cursor.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (change, account))
+                if is_piggy and row["piggy_id"]:
+                    cursor.execute(
+                        "UPDATE piggy_banks SET current_amount = current_amount + ? WHERE id = ?",
+                        (amount, row["piggy_id"]),
+                    )
+                processed_count += 1
 
-            if today < next_due: continue
-
-            date_str = next_due.strftime("%Y-%m-%d")
-            amount = float(row["amount"] or 0.0)
-            hist_type, final_cat = row["type"], row["category"]
-
-            if row["type"] == "Na Skarbonkę":
-                hist_type, final_cat = "Wydatek", "Oszczędności"
-
-            _insert_transaction_row(conn, date_str, hist_type, final_cat or "---", row["account_type"], row["name"],
-                                    amount, f"[CYKLICZNE] {row['name']}", is_reg)
-
-            change = amount if row["type"] == "Dochód" else -amount
-            cursor.execute("UPDATE accounts SET balance = balance + ? WHERE name = ?", (change, row["account_type"]))
-
-            if row["type"] == "Na Skarbonkę" and row["piggy_id"]:
-                cursor.execute("UPDATE piggy_banks SET current_amount = current_amount + ? WHERE id = ?",
-                               (amount, row["piggy_id"]))
-
-            cursor.execute("UPDATE recurring_payments SET last_payment_date = ? WHERE id = ?", (date_str, row["id"]))
-            processed_count += 1
+            cursor.execute(
+                "UPDATE recurring_payments SET last_payment_date = ? WHERE id = ?",
+                (due_dates[-1].strftime("%Y-%m-%d"), row["id"]),
+            )
 
         conn.commit()
         return processed_count
     except Exception as e:
-        print(f"Błąd przetwarzania cyklicznych: {e}")
+        logging.error(f"Błąd przetwarzania cyklicznych: {e}")
         conn.rollback()
         return 0
     finally:

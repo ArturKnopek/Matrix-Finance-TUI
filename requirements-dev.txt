@@ -1,0 +1,5 @@
+# Testy (pytest) i budowanie pliku .exe (PyInstaller)
+-r requirements.txt
+pytest>=8.0
+pyinstaller==6.18.0
+pyinstaller-hooks-contrib==2026.0

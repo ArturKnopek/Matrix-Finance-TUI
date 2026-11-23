@@ -15,10 +15,14 @@ def _ensure_project_root_on_path() -> None:
 
 
 def _setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-    )
+    """Komunikaty startowe na konsolę; w trakcie działania TUI błędy trafiają do pliku."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    try:
+        from src.utils.logging_setup import setup_logging
+
+        setup_logging()
+    except Exception as e:  # logowanie nie może zablokować startu
+        logging.warning(f"Nie udało się skonfigurować logów w pliku: {e}")
 
 
 def main() -> int:
@@ -44,7 +48,21 @@ def main() -> int:
 
         return 1
 
+    try:
+        from src.database import get_setting
+        from src.utils.logging_setup import apply_debug_logging
+
+        if get_setting("dev_mode", "0") == "1":
+            apply_debug_logging(True)
+    except Exception:
+        pass
+
     logging.info(">>> [BOOT] Uruchamianie interfejsu...")
+    # w trakcie działania TUI nie piszemy na konsolę (rozjeżdżałoby to ekran)
+    for handler in list(logging.getLogger().handlers):
+        if type(handler) is logging.StreamHandler:
+            logging.getLogger().removeHandler(handler)
+
     app = MatrixApp()
     app.run()
     return 0

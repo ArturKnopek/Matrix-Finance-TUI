@@ -1,5 +1,16 @@
+"""
+Jednorazowa migracja starej bazy „wszystko w jednym” (budget.db) do układu
+per-użytkownik używanego przez aplikację (~/.matrix_finance/auth.db + data/<user_id>.db).
+
+Użycie:
+    python -m src.migrate --old-db sciezka/do/budget.db --user Jan
+    (hasło zostanie pobrane interaktywnie; można też podać --password)
+"""
+
 from __future__ import annotations
 
+import argparse
+import getpass
 import sqlite3
 import shutil
 from pathlib import Path
@@ -7,12 +18,11 @@ from datetime import datetime
 
 # Importujemy AuthService, żeby hashowanie było spójne z aplikacją
 from src.core.auth import AuthService
-
+from src.database import AUTH_DB as _AUTH_DB, DATA_DIR, init_auth_db, init_user_db
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OLD_DB = PROJECT_ROOT / "budget.db"             # stara baza "wszystko w jednym"
-AUTH_DB = PROJECT_ROOT / "auth.db"              # nowa baza globalna: users + settings
-DATA_DIR = PROJECT_ROOT / "data"                # katalog na bazy userów
+OLD_DB = PROJECT_ROOT / "budget.db"             # domyślna lokalizacja starej bazy
+AUTH_DB = Path(_AUTH_DB)                        # ta sama baza logowania, której używa aplikacja
 
 
 BUDGET_TABLES = [
@@ -26,6 +36,11 @@ BUDGET_TABLES = [
 
 
 def ensure_auth_db() -> None:
+    """Tworzy auth.db dokładnie tak jak aplikacja."""
+    init_auth_db()
+
+
+def _legacy_ensure_auth_db() -> None:
     AUTH_DB.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(AUTH_DB))
     cur = conn.cursor()
@@ -74,8 +89,6 @@ def get_or_create_user(username: str, plain_password: str) -> str:
         conn.close()
         return row["id"]
 
-    user_id = AuthService.hash_password("seed")  # tylko żeby wymusić import; nie używamy
-    # generujemy UUID bez zależności zewnętrznych
     import uuid
     user_id = uuid.uuid4().hex
 
@@ -91,18 +104,18 @@ def get_or_create_user(username: str, plain_password: str) -> str:
     return user_id
 
 
-def backup_old_db() -> Path:
-    if not OLD_DB.exists():
-        raise FileNotFoundError(f"Nie znaleziono {OLD_DB}")
+def backup_old_db(old_db: Path = OLD_DB) -> Path:
+    if not old_db.exists():
+        raise FileNotFoundError(f"Nie znaleziono {old_db}")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = PROJECT_ROOT / f"budget_backup_{ts}.db"
-    shutil.copy2(OLD_DB, backup_path)
+    backup_path = old_db.with_name(f"budget_backup_{ts}.db")
+    shutil.copy2(old_db, backup_path)
     return backup_path
 
 
 def create_or_overwrite_user_db(user_id: str) -> Path:
-    DATA_DIR.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     user_db = DATA_DIR / f"{user_id}.db"
 
     if user_db.exists():
@@ -149,27 +162,40 @@ def migrate_table(src: sqlite3.Connection, dst: sqlite3.Connection, table: str) 
     return len(rows)
 
 
-def main() -> None:
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Migracja starej bazy budget.db do Matrix Finance")
+    parser.add_argument("--old-db", type=Path, default=OLD_DB, help="ścieżka do starej bazy budget.db")
+    parser.add_argument("--user", required=True, help="nazwa użytkownika, do którego trafią dane")
+    parser.add_argument("--password", help="hasło (gdy pominięte – zostanie pobrane interaktywnie)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> None:
+    args = parse_args(argv)
+    password = args.password or getpass.getpass(f"Hasło dla użytkownika {args.user} (min. 6 znaków): ")
+    if len(password) < 6:
+        raise SystemExit("Hasło musi mieć co najmniej 6 znaków.")
+
     print(">>> [BOOTSTRAP] Start")
 
     # 1) backup starej bazy
-    backup_path = backup_old_db()
-    print(f">>> [BOOTSTRAP] Backup starej bazy: {backup_path.name}")
+    backup_path = backup_old_db(args.old_db)
+    print(f">>> [BOOTSTRAP] Backup starej bazy: {backup_path}")
 
     # 2) auth.db
     ensure_auth_db()
     print(f">>> [BOOTSTRAP] auth.db gotowe: {AUTH_DB}")
 
-    # 3) użytkownik Artur / 000000
-    user_id = get_or_create_user("Artur", "000000")
-    print(f">>> [BOOTSTRAP] Użytkownik: Artur | user_id={user_id}")
+    # 3) użytkownik
+    user_id = get_or_create_user(args.user, password)
+    print(f">>> [BOOTSTRAP] Użytkownik: {args.user} | user_id={user_id}")
 
     # 4) user db
     user_db = create_or_overwrite_user_db(user_id)
     print(f">>> [BOOTSTRAP] Baza użytkownika: {user_db}")
 
     # 5) migracja danych budżetowych
-    src = sqlite3.connect(str(OLD_DB))
+    src = sqlite3.connect(str(args.old_db))
     dst = sqlite3.connect(str(user_db))
     try:
         src.row_factory = sqlite3.Row
@@ -186,7 +212,7 @@ def main() -> None:
         dst.commit()
         print(f">>> [BOOTSTRAP] Migracja OK. Łącznie skopiowano wierszy: {total}")
 
-    except Exception as e:
+    except Exception:
         dst.rollback()
         print("!!! [BOOTSTRAP] BŁĄD migracji. Wycofano zmiany.")
         raise
@@ -194,8 +220,9 @@ def main() -> None:
         src.close()
         dst.close()
 
-    print(">>> [BOOTSTRAP] GOTOWE")
-    print(">>> Teraz możesz dopasować aplikację do trybu per-user DB (data/<user_id>.db).")
+    # 6) dociągnięcie schematu do aktualnej wersji aplikacji
+    init_user_db(str(user_db))
+    print(">>> [BOOTSTRAP] GOTOWE – możesz zalogować się w aplikacji.")
 
 
 if __name__ == "__main__":
