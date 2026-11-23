@@ -1,166 +1,80 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional, Tuple, Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, VerticalScroll
-from textual.widgets import Input, Select, Label, Checkbox
+from textual.containers import Horizontal, VerticalScroll
+from textual.widgets import Checkbox, Input, Label, Select
 
-from src.database import get_unique_categories, get_account_options
+from src.database import get_account_options, get_active_month_str, get_unique_categories
+from src.utils.parsing import AMOUNT_RESTRICT, parse_amount, parse_user_date
+
+FORM_HINT = "Enter / ^S — zapisz   ·   ESC — anuluj   ·   ↑ ↓ — poprzednie / następne pole"
 
 
-class TransactionFormView(Container):
-    """Formularz dodawania/edycji transakcji (Wydatek/Dochód) z kontem Karta/Gotówka."""
+def form_row(label: str, *widgets, row_id: Optional[str] = None, classes: str = "") -> Horizontal:
+    """Wiersz formularza: etykieta o stałej szerokości + pole wypełniające resztę."""
+    return Horizontal(Label(label, classes="row-label"), *widgets, id=row_id, classes=f"form-row {classes}".strip())
+
+
+class TransactionFormView(VerticalScroll):
+    """Formularz dodawania/edycji transakcji."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.add_class("form-view")
         self.editing_id: Optional[int] = None
 
-    # ---------------------------------------------------------------------
-    # UI
-    # ---------------------------------------------------------------------
-
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="form-scroll-container"):
-            yield Label("NOWA TRANSAKCJA", id="form-title-label", classes="form-header")
-
-            # --- 1) DATA ---
-            with Horizontal(classes="form-row"):
-                yield Label("Data:", classes="row-label")
-                yield Input(placeholder="Puste = Dzisiaj", id="input-date", classes="row-input")
-
-            # --- 2) RODZAJ ---
-            with Horizontal(classes="form-row"):
-                yield Label("Rodzaj:", classes="row-label")
-                yield Select(
-                    [("Wydatek", "Wydatek"), ("Dochód", "Dochód")],
-                    value="Wydatek",
-                    id="input-type",
-                    allow_blank=False,
-                    classes="row-select",
-                )
-
-            # --- 3) KONTO ---
-            with Horizontal(classes="form-row"):
-                yield Label("Konto:", classes="row-label")
-                yield Select(
-                    [],
-                    prompt="Wybierz konto...",
-                    id="input-account",
-                    allow_blank=True,
-                    classes="row-select",
-                )
-
-            # --- 4) KWOTA ---
-            with Horizontal(classes="form-row"):
-                yield Label("Kwota (PLN):", classes="row-label")
-                yield Input(
-                    placeholder="0.00",
-                    id="input-amount",
-                    classes="row-input",
-                    restrict=r"^[0-9.,]*$",
-                )
-
-            # --- 5) KATEGORIA ---
-            with Horizontal(classes="form-row"):
-                yield Label("Kategoria:", classes="row-label")
-                # allow_blank=True -> możemy ustawić Select.BLANK bez błędów
-                yield Select([], prompt="Wybierz...", id="input-category", classes="row-select", allow_blank=True)
-
-            # --- 6) SKLEP/OPIS ---
-            with Horizontal(classes="form-row"):
-                yield Label("Sklep/Opis:", classes="row-label")
-                yield Input(placeholder="...", id="input-shop", classes="row-input")
-
-            # --- 7) NOTATKA (opis dodatkowy) ---
-            with Horizontal(classes="form-row"):
-                yield Label("Notatka:", classes="row-label")
-                yield Input(placeholder="...", id="input-desc", classes="row-input")
-
-            # --- 8) CHECKBOX ---
-            with Horizontal(classes="form-row checkbox-row"):
-                yield Label("", classes="row-label")
-                yield Checkbox("Rejestrowana", id="input-registered", value=True)
+        yield Label("NOWA TRANSAKCJA", id="form-title-label", classes="form-header")
+        yield form_row("Data:", Input(placeholder="puste = dziś · 12 · 12.05 · wczoraj", id="input-date",
+                                      classes="row-input"))
+        yield form_row("Rodzaj:", Select([("Wydatek", "Wydatek"), ("Dochód", "Dochód")], value="Wydatek",
+                                         id="input-type", allow_blank=False, classes="row-select"))
+        yield form_row("Konto:", Select([], prompt="Wybierz konto...", id="input-account", allow_blank=True,
+                                        classes="row-select"))
+        yield form_row("Kwota (PLN):", Input(placeholder="0.00  (można liczyć: 12.5+3)", id="input-amount",
+                                             classes="row-input", restrict=AMOUNT_RESTRICT))
+        yield form_row("Kategoria:", Select([], prompt="Wybierz...", id="input-category", allow_blank=True,
+                                            classes="row-select"))
+        yield form_row("Sklep / opis:", Input(placeholder="np. Biedronka", id="input-shop", classes="row-input"))
+        yield form_row("Notatka:", Input(placeholder="opcjonalnie", id="input-desc", classes="row-input"))
+        yield form_row("", Checkbox("Zapisz w historii (odznacz = tylko korekta salda)", id="input-registered",
+                                    value=True), classes="checkbox-row")
+        yield Label(FORM_HINT, classes="form-hint")
 
     def on_mount(self) -> None:
         self._load_categories()
         self._load_accounts()
 
-        # Fokus na dacie (lub kwocie, jeśli wolisz)
-        try:
-            self.query_one("#input-date", Input).focus()
-        except Exception:
-            pass
+    # ------------------------------------------------------------- helpers
 
-    # ---------------------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------------------
-
-    def _load_accounts(self) -> None:
+    def _load_accounts(self, keep: Optional[str] = None) -> None:
         sel = self.query_one("#input-account", Select)
-        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        options = list(get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")])
+        values = {v for _, v in options}
+        if keep and keep not in values:
+            options.append((f"{keep} (nieaktywne)", keep))
+            values.add(keep)
         sel.set_options(options)
-        if options and sel.value in (None, Select.BLANK):
+        if keep:
+            sel.value = keep
+        elif options:
             sel.value = options[0][1]
 
-    def _ensure_account_exists(self, account_name: str) -> None:
-        if not account_name:
-            return
-        sel = self.query_one("#input-account", Select)
-        options = get_account_options() or []
-        values = {value for _, value in options}
-        if account_name not in values:
-            options.append((account_name, account_name))
-        sel.set_options(options)
-        sel.value = account_name
-
-
-
-    def _load_categories(self) -> None:
-        """Ładuje opcje kategorii do Select."""
-        cats = get_unique_categories() or []
-        if not cats:
-            cats = ["Spożywcze", "Transport", "Opłaty", "Inne"]
-
+    def _load_categories(self, keep: Optional[str] = None) -> None:
+        cats = list(get_unique_categories() or [])
+        if keep and keep not in cats:
+            cats.append(keep)
         sel = self.query_one("#input-category", Select)
         sel.set_options([(c, c) for c in cats])
+        sel.value = keep if keep else Select.BLANK
 
-        # jeśli jeszcze nic nie wybrane, ustaw BLANK
-        if sel.value in (None, Select.BLANK):
-            sel.value = Select.BLANK
-
-    def _ensure_category_exists(self, cat_value: str) -> None:
-        """
-        Jeśli w edycji transakcji kategoria z bazy nie istnieje już na liście,
-        dodajemy ją tymczasowo do Selecta, żeby uniknąć "Illegal select value".
-        """
-        if not cat_value:
-            return
-
-        sel = self.query_one("#input-category", Select)
-        # options to lista (label, value); nie zawsze jest łatwo odczytać,
-        # więc najprościej spróbować ustawić wartość; jeśli się nie da -> dodaj opcję.
-        try:
-            sel.value = cat_value
-        except Exception:
-            # dodaj brakującą kategorię i ustaw
-            try:
-                current = [(opt[0], opt[1]) for opt in sel.options]  # type: ignore[attr-defined]
-            except Exception:
-                current = []
-            current.append((cat_value, cat_value))
-            sel.set_options(current)
-            sel.value = cat_value
-
-    # ---------------------------------------------------------------------
-    # API używane przez MainDashboard
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------- API (MainDashboard)
 
     def reset_form(self) -> None:
         self.editing_id = None
         self.query_one("#form-title-label", Label).update("NOWA TRANSAKCJA")
-
         self.query_one("#input-date", Input).value = ""
         self.query_one("#input-type", Select).value = "Wydatek"
         self._load_accounts()
@@ -168,112 +82,62 @@ class TransactionFormView(Container):
         self.query_one("#input-shop", Input).value = ""
         self.query_one("#input-desc", Input).value = ""
         self.query_one("#input-registered", Checkbox).value = True
-
-        # kategoria: wróć do BLANK
-        try:
-            self.query_one("#input-category", Select).value = Select.BLANK
-        except Exception:
-            pass
-
-        # odśwież listę kategorii (na wypadek zmian w DB)
         self._load_categories()
+        self.scroll_home(animate=False)
 
     def load_existing_data(self, data) -> None:
-        """Ładuje dane z bazy do formularza (edycja)."""
         data = dict(data)
-        # ---------------------------------------------------
-
         self.editing_id = int(data["id"])
-        self.query_one("#form-title-label", Label).update(f"EDYCJA TRANSAKCJI (ID: {data['id']})")
-
-        self.query_one("#input-date", Input).value = str(data["date"])
-        self.query_one("#input-type", Select).value = data["type"]
-
-        # Konto (account_type) - teraz .get() zadziała poprawnie
-        acc = data["account_type"] if data.get("account_type") else ""
-        self._ensure_account_exists(acc or "Karta")
-
-        # Kwota
-        self.query_one("#input-amount", Input).value = f"{float(data['amount']):.2f}"
-
-        # Kategorie: dla Dochodu może być pusta
-        cat_val = data["category"] or ""
-        self._load_categories()
-        if cat_val:
-            self._ensure_category_exists(cat_val)
-        else:
-            self.query_one("#input-category", Select).value = Select.BLANK
-
-        self.query_one("#input-shop", Input).value = data["shop"] or ""
-        # W bazie kolumna to "description"
-        self.query_one("#input-desc", Input).value = data["description"] or ""
-        self.query_one("#input-registered", Checkbox).value = True if data["is_registered"] else False
+        code = data.get("human_code") or f"TX{self.editing_id:06d}"
+        self.query_one("#form-title-label", Label).update(f"EDYCJA TRANSAKCJI {code}")
+        self.query_one("#input-date", Input).value = str(data.get("date") or "")
+        self.query_one("#input-type", Select).value = data.get("type") or "Wydatek"
+        self._load_accounts(keep=data.get("account_type") or "Karta")
+        self.query_one("#input-amount", Input).value = f"{float(data.get('amount') or 0.0):.2f}"
+        self._load_categories(keep=data.get("category") or None)
+        self.query_one("#input-shop", Input).value = data.get("shop") or ""
+        self.query_one("#input-desc", Input).value = data.get("description") or ""
+        self.query_one("#input-registered", Checkbox).value = bool(data.get("is_registered"))
 
     def get_data_and_validate(self) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Zwraca (data_dict, error_msg). Jeśli error_msg != None, to walidacja nie przeszła."""
+        raw_date = self.query_one("#input-date", Input).value
+        final_date = parse_user_date(raw_date, get_active_month_str())
+        if final_date is None:
+            return None, "Niepoprawna data! Wpisz np. 12, 12.05, 12.05.2026 albo 2026-05-12."
 
-        # 1) Data
-        raw_date = self.query_one("#input-date", Input).value.strip()
-        final_date = raw_date if raw_date else datetime.now().strftime("%Y-%m-%d")
+        amount = parse_amount(self.query_one("#input-amount", Input).value)
+        if amount is None:
+            return None, "Podaj poprawną kwotę!"
+        if amount <= 0:
+            return None, "Kwota musi być większa od zera!"
 
-        # Smart date: wpisanie tylko dnia ("12")
-        if raw_date.isdigit() and len(raw_date) <= 2:
-            now = datetime.now()
-            try:
-                day = int(raw_date)
-                final_date = f"{now.year}-{now.month:02d}-{day:02d}"
-            except Exception:
-                pass
-
-        # Minimalna walidacja formatu YYYY-MM-DD (żeby nie wpuścić śmieci)
-        try:
-            datetime.strptime(final_date, "%Y-%m-%d")
-        except Exception:
-            return None, "Błąd: Niepoprawna data! (format: YYYY-MM-DD lub sam dzień np. 12)"
-
-        # 2) Kwota
-        raw_amount = self.query_one("#input-amount", Input).value.strip().replace(",", ".")
-        if raw_amount == "":
-            return None, "Błąd: Podaj kwotę!"
-
-        try:
-            amount_float = float(raw_amount)
-        except ValueError:
-            return None, "Błąd: Niepoprawna kwota!"
-
-        if amount_float <= 0:
-            return None, "Błąd: Kwota musi być większa od zera!"
-
-        # 3) Reszta pól
         t_type = self.query_one("#input-type", Select).value
         category_val = self.query_one("#input-category", Select).value
+        account = self.query_one("#input-account", Select).value
         shop = self.query_one("#input-shop", Input).value.strip()
         desc = self.query_one("#input-desc", Input).value.strip()
-        account = self.query_one("#input-account", Select).value
         is_reg = self.query_one("#input-registered", Checkbox).value
 
-        # 4) Kategoria
-        final_category = category_val
-        if t_type == "Wydatek":
-            if category_val in (None, Select.BLANK):
-                return None, "Wybierz Kategorię dla wydatku!"
-        else:
-            # Dochód -> kategoria opcjonalna
-            if category_val in (None, Select.BLANK):
-                final_category = ""
+        if account in (None, Select.BLANK):
+            return None, "Wybierz konto!"
 
-        # 5) Sklep/Opis wymagany (u Ciebie to ważne — zostawiam)
+        if category_val in (None, Select.BLANK):
+            if t_type == "Wydatek":
+                if not get_unique_categories():
+                    return None, "Brak kategorii — dodaj je w zakładce 3 (Kategorie)."
+                return None, "Wybierz kategorię dla wydatku!"
+            category_val = ""
+
         if not shop:
             return None, "Wpisz sklep lub opis!"
 
-        # OK
         return {
             "date": final_date,
             "type": t_type,
             "account": account,
-            "category": final_category,
+            "category": category_val,
             "shop": shop,
-            "amount": amount_float,
-            "desc": desc,       # ważne: MainDashboard przekazuje to do database.add_transaction -> description
-            "is_reg": is_reg,   # ważne: klucz oczekiwany w MainDashboard
+            "amount": amount,
+            "desc": desc,
+            "is_reg": is_reg,
         }, None

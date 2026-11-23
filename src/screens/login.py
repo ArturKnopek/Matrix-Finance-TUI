@@ -4,9 +4,9 @@ import logging
 from textual.screen import Screen
 from textual.app import ComposeResult
 from textual.widgets import Input, Button, Label
-from textual.containers import Container
+from textual.containers import Container, Vertical
 
-from src.database import get_setting, user_exists, set_setting
+from src.database import user_exists, set_setting
 
 try:
     from src.core.auth import AuthService  # type: ignore
@@ -34,9 +34,9 @@ class LoginScreen(Screen):
                     yield Button("ZALOGUJ", id="btn-login", classes="btn-green")
                     yield Button("WYJDŹ", id="btn-exit", classes="btn-red")
 
-                with Container(id="login-extra"):
-                    yield Button("DODAJ NOWE KONTO", id="btn-create-account", classes="btn-link")
-                    yield Button("IMPORTUJ KOPIĘ Z DOKUMENTÓW", id="btn-import-backup", classes="btn-link")
+                with Vertical(id="login-extra"):
+                    yield Button("+ DODAJ NOWE KONTO", id="btn-create-account", classes="btn-link")
+                    yield Button("↺ IMPORTUJ KOPIĘ Z DOKUMENTÓW", id="btn-import-backup", classes="btn-link")
 
     def on_mount(self) -> None:
         self.reset_login_fields(keep_username=True)
@@ -76,7 +76,9 @@ class LoginScreen(Screen):
         try:
             user_id = AuthService.verify_login(username=login, password=password)
             if not user_id:
-                self.query_one("#user-password", Input).value = ""
+                pwd = self.query_one("#user-password", Input)
+                pwd.value = ""
+                pwd.focus()
                 return self.notify("Nieprawidłowy login lub hasło.", severity="error")
 
             from src.database import set_active_user_db, init_user_db
@@ -104,6 +106,9 @@ class LoginScreen(Screen):
                 self.notify(f"Błąd otwierania importu: {e}", severity="error")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "user-login" and not self.query_one("#user-password", Input).value:
+            self.query_one("#user-password", Input).focus()  # Enter w loginie -> hasło
+            return
         if event.input.id in ("user-login", "user-password"):
             self.attempt_login()
 

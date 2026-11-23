@@ -1,117 +1,70 @@
 from __future__ import annotations
-from src.database import get_account_options
-from typing import Optional, Tuple, Dict, Any
+
+from typing import Any, Dict, Optional, Tuple
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.widgets import Input, Label, Select
+
+from src.database import get_account_options
+from src.utils.parsing import AMOUNT_RESTRICT, parse_amount
+from src.views.transaction_form_view import FORM_HINT, form_row
 
 
 class PiggyBankFormView(VerticalScroll):
-    """Formularz Skarbonki (Nazwa, Kwota celu, Konto domyślne)."""
+    """Formularz celu oszczędnościowego (nazwa, kwota celu, konto domyślne)."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.add_class("form-view")
         self.editing_id: Optional[int] = None
 
     def compose(self) -> ComposeResult:
         yield Label("NOWY CEL", id="piggy-form-title", classes="form-header")
-
-        with Horizontal(classes="form-row"):
-            yield Label("Nazwa celu:", classes="row-label")
-            yield Input(placeholder="np. Wakacje", id="piggy-input-name", classes="row-input")
-
-        with Horizontal(classes="form-row"):
-            yield Label("Kwota celu (PLN):", classes="row-label")
-            yield Input(
-                placeholder="0.00",
-                id="piggy-input-target",
-                classes="row-input",
-                restrict=r"^[0-9.,]*$",
-            )
-
-        with Horizontal(classes="form-row"):
-            yield Label("Konto domyślne:", classes="row-label")
-            yield Select(
-                [],
-                prompt="Wybierz konto...",
-                id="piggy-input-account",
-                allow_blank=True,
-                classes="row-select",
-            )
+        yield form_row("Nazwa celu:", Input(placeholder="np. Wakacje", id="piggy-input-name", classes="row-input"))
+        yield form_row("Kwota celu (PLN):", Input(placeholder="0.00", id="piggy-input-target", classes="row-input",
+                                                  restrict=AMOUNT_RESTRICT))
+        yield form_row("Konto domyślne:", Select([], prompt="Wybierz konto...", id="piggy-input-account",
+                                                 allow_blank=True, classes="row-select"))
+        yield Label(FORM_HINT, classes="form-hint")
 
     def on_mount(self) -> None:
-        """Focus od razu na nazwie."""
         self._load_accounts()
-        try:
-
-            self.query_one("#piggy-input-name", Input).focus()
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # API używane przez MainDashboard
-    # ------------------------------------------------------------------
 
     def reset_form(self) -> None:
         self.editing_id = None
         self.query_one("#piggy-form-title", Label).update("NOWY CEL")
-
         self.query_one("#piggy-input-name", Input).value = ""
         self.query_one("#piggy-input-target", Input).value = ""
         self._load_accounts()
 
-        try:
-            self.query_one("#piggy-input-name", Input).focus()
-        except Exception:
-            pass
-
     def load_existing_data(self, data) -> None:
-        """Ładuje dane skarbonki do edycji (obsługuje sqlite3.Row i dict)."""
-        d = dict(data)  # <<< KLUCZ: sqlite3.Row -> dict
-
+        d = dict(data)
         self.editing_id = int(d["id"])
-        self.query_one("#piggy-form-title", Label).update(f"EDYCJA CELU (ID: {d['id']})")
-
-        self.query_one("#piggy-input-name", Input).value = d.get("name", "") or ""
-        self.query_one("#piggy-input-target", Input).value = f"{float(d.get('target_amount', 0.0) or 0.0):.2f}"
-
-        self._load_accounts()
-        acc = d.get("account_type") or "Karta"
-        self.query_one("#piggy-input-account", Select).value = acc
-
-        try:
-            self.query_one("#piggy-input-name", Input).focus()
-        except Exception:
-            pass
+        code = d.get("pb_code") or f"PB{self.editing_id:06d}"
+        self.query_one("#piggy-form-title", Label).update(f"EDYCJA CELU {code}")
+        self.query_one("#piggy-input-name", Input).value = d.get("name") or ""
+        self.query_one("#piggy-input-target", Input).value = f"{float(d.get('target_amount') or 0.0):.2f}"
+        self._load_accounts(keep=d.get("account_type") or "Karta")
 
     def get_data_and_validate(self) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """Zwraca (data, error)."""
         name = self.query_one("#piggy-input-name", Input).value.strip()
-        raw_target = self.query_one("#piggy-input-target", Input).value.strip().replace(",", ".")
-
         if not name:
             return None, "Podaj nazwę celu!"
-
-        if raw_target == "":
-            return None, "Podaj kwotę celu!"
-
-        try:
-            target = float(raw_target)
-        except ValueError:
-            return None, "Błędna kwota!"
-
-        # Jeśli chcesz dopuszczać 0.0 jako cel, usuń ten warunek
+        target = parse_amount(self.query_one("#piggy-input-target", Input).value)
+        if target is None:
+            return None, "Podaj poprawną kwotę celu!"
         if target <= 0:
             return None, "Kwota celu musi być większa od zera!"
-
         account = self.query_one("#piggy-input-account", Select).value
-
+        if account in (None, Select.BLANK):
+            return None, "Wybierz konto!"
         return {"name": name, "target": target, "account": account}, None
 
-    def _load_accounts(self) -> None:
+    def _load_accounts(self, keep: Optional[str] = None) -> None:
         sel = self.query_one("#piggy-input-account", Select)
-        options = get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")]
+        options = list(get_account_options() or [("Karta", "Karta"), ("Gotówka", "Gotówka")])
+        if keep and keep not in {v for _, v in options}:
+            options.append((keep, keep))
         sel.set_options(options)
-        if options and sel.value in (None, Select.BLANK):
-            sel.value = options[0][1]
+        sel.value = keep or options[0][1]

@@ -1,10 +1,11 @@
 import sys
 from pathlib import Path
+
 from textual.app import App
 
 from src.screens.login import LoginScreen
-from src.screens.welcome import WelcomeScreen
 from src.screens.main_dashboard import MainDashboard
+from src.screens.welcome import WelcomeScreen
 
 
 class MatrixApp(App):
@@ -12,16 +13,18 @@ class MatrixApp(App):
     SUB_TITLE = "Budget App"
 
     # --- FIX DLA PYINSTALLER (Aby widział style w pliku exe) ---
-    if getattr(sys, 'frozen', False):
-        # Jeśli uruchamiamy jako skompilowany EXE
-        BASE_PATH = Path(sys._MEIPASS)
+    if getattr(sys, "frozen", False):
+        BASE_PATH = Path(sys._MEIPASS)  # type: ignore[attr-defined]
     else:
-        # Jeśli uruchamiamy normalnie z Pythona
         BASE_PATH = Path(__file__).resolve().parent.parent
-
-    # Ścieżka do stylów
     CSS_PATH = str(BASE_PATH / "assets" / "tui_style.tcss")
-    # -----------------------------------------------------------
+
+    # Paleta poleceń Textual zajmowała Ctrl+P (skrót „Pauza” w płatnościach cyklicznych)
+    ENABLE_COMMAND_PALETTE = False
+
+    # Klasy breakpointów ustawiane automatycznie na każdym ekranie (patrz tui_style.tcss)
+    HORIZONTAL_BREAKPOINTS = [(0, "-w-xs"), (60, "-w-sm"), (100, "-w-md"), (150, "-w-lg")]
+    VERTICAL_BREAKPOINTS = [(0, "-h-xs"), (24, "-h-sm"), (32, "-h-md"), (45, "-h-lg")]
 
     SCREENS = {
         "welcome": WelcomeScreen,
@@ -40,13 +43,11 @@ class MatrixApp(App):
         self.current_username = username
 
     def on_ready(self) -> None:
-        # Pierwszy ekran -> push_screen (stos jest pusty)
         self.push_screen("welcome")
 
     def clear_session(self) -> None:
         self.current_user_id = None
         self.current_username = None
-
-        # ważne: odpinamy bazę użytkownika (wracamy do guest)
         from src.database import clear_active_user_db
+
         clear_active_user_db()

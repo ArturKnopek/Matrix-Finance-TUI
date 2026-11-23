@@ -1,232 +1,344 @@
 from __future__ import annotations
+
+from pathlib import Path
 from typing import Tuple
+
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Label, Input
+from textual.widgets import Button, Checkbox, Input, Label
+
+BACKUP_FILENAME = "Matrix_Backup.matrix"
+
+
+def documents_dir() -> Path:
+    docs = Path.home() / "Documents"
+    return docs if docs.exists() else Path.home()
+
 
 class ConfirmationModal(ModalScreen[Tuple[bool, bool]]):
-    BINDINGS = [("enter", "confirm", "Tak"), ("escape", "cancel", "Nie"), ("y", "confirm", "Tak"), ("n", "cancel", "Nie")]
+    BINDINGS = [("enter", "confirm", "Tak"), ("escape", "cancel", "Nie"), ("y", "confirm", "Tak"),
+                ("t", "confirm", "Tak"), ("n", "cancel", "Nie")]
+
     def __init__(self, message: str, show_checkbox: bool = True) -> None:
         super().__init__()
         self.message = message
         self.show_checkbox = show_checkbox
+
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        with Vertical(id="modal-dialog", classes="modal-dialog"):
             yield Label(self.message, id="modal-msg")
             if self.show_checkbox:
                 with Container(id="modal-chk"):
                     yield Checkbox("Nie pytaj ponownie", value=False, id="modal-dont-ask")
             with Horizontal(id="modal-btns"):
-                yield Button("TAK", id="btn-yes", classes="btn-green")
-                yield Button("NIE", id="btn-no", classes="btn-red")
-    def on_mount(self) -> None:
-        try: self.query_one("#btn-yes", Button).focus()
-        except Exception: pass
-    def _get_dont_ask_value(self) -> bool:
-        if not self.show_checkbox: return False
-        try: return self.query_one("#modal-dont-ask", Checkbox).value
-        except Exception: return False
-    def action_confirm(self) -> None: self.dismiss((True, self._get_dont_ask_value()))
-    def action_cancel(self) -> None: self.dismiss((False, self._get_dont_ask_value()))
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-yes": self.action_confirm()
-        else: self.action_cancel()
+                yield Button("TAK (T)", id="btn-yes", classes="btn-green")
+                yield Button("NIE (N)", id="btn-no", classes="btn-red")
 
-class ChangePasswordModal(ModalScreen[bool]):
-    BINDINGS = [("enter", "save", "Zapisz"), ("escape", "close_modal", "Anuluj")]
+    def on_mount(self) -> None:
+        self.query_one("#btn-yes", Button).focus()
+
+    def _get_dont_ask_value(self) -> bool:
+        if not self.show_checkbox:
+            return False
+        try:
+            return self.query_one("#modal-dont-ask", Checkbox).value
+        except Exception:
+            return False
+
+    def action_confirm(self) -> None:
+        self.dismiss((True, self._get_dont_ask_value()))
+
+    def action_cancel(self) -> None:
+        self.dismiss((False, self._get_dont_ask_value()))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "btn-yes":
+            self.action_confirm()
+        else:
+            self.action_cancel()
+
+
+class _FormModal(ModalScreen):
+    """Wspólna baza modali z polami: ESC zamyka, Enter w polu = zatwierdź."""
+
+    BINDINGS = [("escape", "cancel", "Anuluj")]
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def submit(self) -> None:  # pragma: no cover - nadpisywane
+        raise NotImplementedError
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        inputs = list(self.query(Input))
+        if event.input in inputs and inputs.index(event.input) < len(inputs) - 1:
+            inputs[inputs.index(event.input) + 1].focus()  # Enter -> następne pole
+        else:
+            self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "btn-cancel":
+            self.dismiss(False)
+        else:
+            self.submit()
+
+    def on_mount(self) -> None:
+        inputs = list(self.query(Input))
+        if inputs:
+            inputs[0].focus()
+
+
+class ChangePasswordModal(_FormModal):
     def __init__(self, username: str, user_id: str):
         super().__init__()
         self.username = username
         self.user_id = user_id
+
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        with Vertical(id="modal-dialog", classes="modal-dialog"):
             yield Label(f"ZMIANA HASŁA — {self.username}", id="modal-msg")
-            yield Input(password=True, placeholder="Stare hasło", id="old-pass")
-            yield Input(password=True, placeholder="Nowe hasło", id="new-pass-1")
-            yield Input(password=True, placeholder="Powtórz nowe hasło", id="new-pass-2")
+            yield Input(password=True, placeholder="Stare hasło", id="old-pass", classes="standard-input")
+            yield Input(password=True, placeholder="Nowe hasło (min. 6 znaków)", id="new-pass-1",
+                        classes="standard-input")
+            yield Input(password=True, placeholder="Powtórz nowe hasło", id="new-pass-2", classes="standard-input")
             with Horizontal(id="modal-btns"):
                 yield Button("ANULUJ", id="btn-cancel", classes="btn-red")
                 yield Button("ZAPISZ", id="btn-save", classes="btn-green")
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-cancel": self.dismiss(False)
-        elif event.button.id == "btn-save": self._try_change_password()
-    def action_close_modal(self) -> None: self.dismiss(False)
-    def action_save(self) -> None: self._try_change_password()
-    def _try_change_password(self) -> None:
+
+    def submit(self) -> None:
         from src.core.auth import AuthService
         from src.database import get_user_by_username, update_user_password
+
         old_input = self.query_one("#old-pass", Input)
         p1 = self.query_one("#new-pass-1", Input).value or ""
         p2 = self.query_one("#new-pass-2", Input).value or ""
         row = get_user_by_username(self.username)
-        if not row: return self.notify("Błąd użytkownika.", severity="error")
+        if not row:
+            self.notify("Błąd użytkownika.", severity="error")
+            return
         if not AuthService.verify_password(old_input.value or "", row["password_hash"]):
             self.notify("Stare hasło jest nieprawidłowe!", severity="error")
             old_input.value = ""
             old_input.focus()
             return
-        if len(p1) < 6: return self.notify("Nowe hasło musi mieć min. 6 znaków!", severity="warning")
-        if p1 != p2: return self.notify("Hasła nie są identyczne!", severity="warning")
+        if len(p1) < 6:
+            self.notify("Nowe hasło musi mieć min. 6 znaków!", severity="warning")
+            return
+        if p1 != p2:
+            self.notify("Hasła nie są identyczne!", severity="warning")
+            return
         if update_user_password(self.user_id, AuthService.hash_password(p1)):
-            self.notify("Hasło zmienione.", severity="information")
+            self.notify("Hasło zmienione. Pamiętaj: stare kopie zapasowe mają stare hasło.",
+                        severity="information")
             self.dismiss(True)
-        else: self.notify("Błąd zmiany hasła!", severity="error")
+        else:
+            self.notify("Błąd zmiany hasła!", severity="error")
 
-class DeleteUserModal(ModalScreen[bool]):
-    BINDINGS = [("enter", "confirm_delete", "Usuń"), ("escape", "cancel", "Anuluj")]
+    # zgodność wsteczna
+    action_save = submit
+
+    def action_close_modal(self) -> None:
+        self.dismiss(False)
+
+
+class DeleteUserModal(_FormModal):
+    """Zwraca: False (anulowano), True (usunięto innego użytkownika), "self" (usunięto siebie)."""
+
     def __init__(self, target_user_id: str, target_username: str, current_username: str, current_user_id: str):
         super().__init__()
         self.target_user_id = target_user_id
         self.target_username = target_username
         self.current_username = current_username
         self.current_user_id = current_user_id
+
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        with Vertical(id="modal-dialog", classes="modal-dialog"):
             yield Label(f"USUŃ UŻYTKOWNIKA — {self.target_username}", id="modal-msg")
-            yield Label("Podaj HASŁO USUWANEGO użytkownika.", classes="info-text")
-            yield Input(password=True, placeholder="Hasło", id="del-pass")
+            yield Label("Wszystkie dane tego użytkownika zostaną usunięte.\nPodaj HASŁO usuwanego użytkownika.",
+                        classes="info-text")
+            yield Input(password=True, placeholder="Hasło", id="del-pass", classes="standard-input")
             with Horizontal(id="modal-btns"):
-                yield Button("ANULUJ", id="btn-cancel", classes="btn-red")
-                yield Button("USUŃ", id="btn-delete", classes="btn-green")
-    def on_mount(self) -> None:
-        try: self.query_one("#del-pass", Input).focus()
-        except Exception: pass
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-cancel": self.dismiss(False)
-        elif event.button.id == "btn-delete": self.action_confirm_delete()
-    def action_cancel(self) -> None: self.dismiss(False)
-    def action_confirm_delete(self) -> None:
+                yield Button("ANULUJ", id="btn-cancel", classes="btn-green")
+                yield Button("USUŃ", id="btn-delete", classes="btn-red")
+
+    def submit(self) -> None:
         from src.core.auth import AuthService
-        from src.database import get_user_by_username, delete_user
+        from src.database import delete_user, get_user_by_username
+
         pwd_input = self.query_one("#del-pass", Input)
-        pwd = pwd_input.value or ""
         row = get_user_by_username(self.target_username)
-        if not row or not AuthService.verify_password(pwd, row["password_hash"]):
+        if not row or not AuthService.verify_password(pwd_input.value or "", row["password_hash"]):
             self.notify("Hasło jest nieprawidłowe!", severity="error")
             pwd_input.value = ""
             pwd_input.focus()
             return
-        if delete_user(self.target_user_id):
-            if str(self.target_user_id) == str(self.current_user_id):
-                try:
-                    if hasattr(self.app, "clear_session"): self.app.clear_session()
-                    self.notify("Zostałeś wylogowany.", severity="information")
-                    self.app.switch_screen("login")
-                except Exception: pass
-            self.notify("Usunięto użytkownika", severity="information")
-            self.dismiss(True)
+        if not delete_user(self.target_user_id):
+            self.notify("Nie udało się usunąć użytkownika.", severity="error")
+            return
+        self.notify(f"Usunięto użytkownika {self.target_username}.", severity="information")
+        self.dismiss("self" if str(self.target_user_id) == str(self.current_user_id) else True)
 
-# ================= NOWE MODALE DLA KOPII ZAPASOWEJ =================
+    action_confirm_delete = submit
 
-class ExportBackupModal(ModalScreen[bool]):
-    """Modal eksportu bazy danych do Dokumentów."""
-    BINDINGS = [("escape", "cancel", "Anuluj")]
+
+class ExportBackupModal(_FormModal):
+    """Eksport zaszyfrowanej kopii bazy do folderu Dokumenty."""
+
     def __init__(self, current_username: str):
         super().__init__()
         self.current_username = current_username
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        target = documents_dir() / BACKUP_FILENAME
+        with Vertical(id="modal-dialog", classes="modal-dialog"):
             yield Label("EKSPORT ZASZYFROWANEJ KOPII", id="modal-msg")
-            # Zmieniony tekst informacyjny:
-            yield Label("Kopia danych zostanie bezpiecznie zapisana w folderze Dokumenty jako 'Matrix_Backup.matrix'.", classes="info-text")
-            yield Input(password=True, placeholder="Twoje obecne hasło", id="exp-pass")
+            yield Label(f"Plik: {target}\nIstniejąca kopia zostanie nadpisana.", classes="info-text")
+            yield Input(password=True, placeholder="Twoje obecne hasło", id="exp-pass", classes="standard-input")
             with Horizontal(id="modal-btns"):
                 yield Button("ANULUJ", id="btn-cancel", classes="btn-red")
                 yield Button("ZAPISZ", id="btn-export", classes="btn-green")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-cancel": self.dismiss(False)
-        elif event.button.id == "btn-export": self.action_export_backup()
-
-    def action_export_backup(self) -> None:
-        from pathlib import Path
-        pwd = self.query_one("#exp-pass", Input).value or ""
+    def submit(self) -> None:
         from src.core.auth import AuthService
-        from src.database import get_user_by_username, get_active_user_db
-        from src.utils.crypto_utils import encrypt_file
+        from src.database import export_encrypted_backup, get_user_by_username
 
+        pwd_input = self.query_one("#exp-pass", Input)
+        pwd = pwd_input.value or ""
         row = get_user_by_username(self.current_username)
         if not row or not AuthService.verify_password(pwd, row["password_hash"]):
             self.notify("Podane hasło jest nieprawidłowe!", severity="error")
-            self.query_one("#exp-pass", Input).value = ""
+            pwd_input.value = ""
             return
 
-        # ZMIANA ŚCIEŻKI NA DOKUMENTY:
-        docs_dir = Path.home() / "Documents"
-        if not docs_dir.exists(): docs_dir = Path.home()
-        out_file = docs_dir / "Matrix_Backup.matrix"
-
-        source_db = get_active_user_db()
-        success = encrypt_file(source_db, str(out_file), pwd)
-
-        if success:
-            self.notify(f"Zaszyfrowano bazę do: Dokumenty/Matrix_Backup.matrix", severity="information")
+        out_file = documents_dir() / BACKUP_FILENAME
+        if export_encrypted_backup(str(out_file), pwd):
+            self.notify(f"Zapisano zaszyfrowaną kopię:\n{out_file}", severity="information")
             self.dismiss(True)
         else:
             self.notify("Krytyczny błąd podczas tworzenia kopii!", severity="error")
 
+    action_export_backup = submit
 
-class ImportBackupModal(ModalScreen[bool]):
-    """Modal importu bazy danych z Dokumentów."""
-    BINDINGS = [("escape", "cancel", "Anuluj")]
+
+class ImportBackupModal(_FormModal):
+    """Import kopii z folderu Dokumenty jako nowe konto użytkownika."""
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="modal-dialog"):
+        with Vertical(id="modal-dialog", classes="modal-dialog"):
             yield Label("IMPORT KOPII ZAPASOWEJ", id="modal-msg")
-            # Zmieniony tekst informacyjny:
-            yield Label("Program wczyta plik 'Matrix_Backup.matrix' z folderu Dokumenty.", classes="info-text")
-            yield Input(placeholder="Nowy Login (np. po zmianie komputera)", id="imp-login")
-            yield Input(password=True, placeholder="Hasło (te, którym zaszyfrowano plik)", id="imp-pass")
+            yield Label(f"Plik: {documents_dir() / BACKUP_FILENAME}", classes="info-text")
+            yield Input(placeholder="Nowy login (np. po zmianie komputera)", id="imp-login",
+                        classes="standard-input")
+            yield Input(password=True, placeholder="Hasło, którym zaszyfrowano kopię", id="imp-pass",
+                        classes="standard-input")
             with Horizontal(id="modal-btns"):
                 yield Button("ANULUJ", id="btn-cancel", classes="btn-red")
                 yield Button("IMPORTUJ", id="btn-import", classes="btn-green")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-cancel": self.dismiss(False)
-        elif event.button.id == "btn-import": self.action_import_backup()
-
-    def action_import_backup(self) -> None:
-        from pathlib import Path
-        # ZMIANA ŚCIEŻKI NA DOKUMENTY:
-        docs_dir = Path.home() / "Documents"
-        if not docs_dir.exists(): docs_dir = Path.home()
-        backup_file = docs_dir / "Matrix_Backup.matrix"
-
+    def submit(self) -> None:
+        backup_file = documents_dir() / BACKUP_FILENAME
         if not backup_file.exists():
-            self.notify("Błąd: Nie znaleziono pliku Matrix_Backup.matrix w Dokumentach!", severity="error")
+            self.notify(f"Nie znaleziono pliku {backup_file}", severity="error")
             return
 
         login = self.query_one("#imp-login", Input).value.strip()
         pwd = self.query_one("#imp-pass", Input).value or ""
-
-        if len(login) < 3 or len(pwd) < 6:
-            self.notify("Login musi mieć min. 3 znaki, a hasło min. 6 znaków.", severity="warning")
+        if len(login) < 3 or " " in login or len(pwd) < 6:
+            self.notify("Login: min. 3 znaki bez spacji, hasło: min. 6 znaków.", severity="warning")
             return
 
         from src.core.auth import AuthService
-        from src.database import init_auth_db, create_user, DATA_DIR, delete_user
+        from src.database import DATA_DIR, create_user, delete_user, init_auth_db, init_user_db
         from src.utils.crypto_utils import decrypt_file
 
         init_auth_db()
-        password_hash = AuthService.hash_password(pwd)
-        ok, msg, user_id = create_user(login, password_hash)
-
+        ok, msg, user_id = create_user(login, AuthService.hash_password(pwd))
         if not ok or not user_id:
             self.notify(msg or "Nie udało się utworzyć użytkownika.", severity="error")
             return
 
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        user_db_path = str(DATA_DIR / f"{user_id}.db")
-
-        success = decrypt_file(str(backup_file), user_db_path, pwd)
-        if not success:
+        user_db_path = DATA_DIR / f"{user_id}.db"
+        if not decrypt_file(str(backup_file), str(user_db_path), pwd):
             delete_user(user_id)
-            if Path(user_db_path).exists():
-                Path(user_db_path).unlink()
+            user_db_path.unlink(missing_ok=True)
             self.notify("Błędne hasło lub uszkodzony plik kopii!", severity="error")
+            return
+
+        try:
+            init_user_db(str(user_db_path))  # migracja schematu starszych kopii
+        except Exception as e:
+            delete_user(user_id)
+            user_db_path.unlink(missing_ok=True)
+            self.notify(f"Plik kopii nie jest poprawną bazą: {e}", severity="error")
             return
 
         self.notify("Kopia zapasowa odzyskana! Zaloguj się.", severity="information")
         self.dismiss(True)
+
+    action_import_backup = submit
+
+
+HELP_SECTIONS = [
+    ("NAWIGACJA", [
+        ("1 – 7", "przełączanie zakładek"),
+        ("↑ ↓ / Tab", "poruszanie się po menu i polach"),
+        ("Enter", "wejście do zakładki / edycja wiersza / zapis"),
+        ("ESC", "anuluj formularz · powrót do menu"),
+        ("F2 / Ctrl+B", "pokaż/ukryj menu boczne"),
+        ("PgUp / PgDn", "poprzednia / następna strona tabeli"),
+    ]),
+    ("DANE", [
+        ("Ctrl+N", "nowy element"),
+        ("Ctrl+E", "edytuj zaznaczony"),
+        ("Ctrl+D", "usuń zaznaczony"),
+        ("Ctrl+S", "zapisz formularz"),
+        ("Ctrl+P", "pauza / wznowienie płatności cyklicznej"),
+        ("+ / -", "wpłata / wypłata (Skarbonki)"),
+        ("/", "szukaj (Transakcje)"),
+        ("Ctrl+R", "odśwież i zaksięguj zaległe płatności"),
+    ]),
+    ("FORMULARZE", [
+        ("Data", "puste = dziś · 12 · 12.05 · 12.05.2026 · wczoraj"),
+        ("Kwota", "12,50 · 1 200 · działania: 12.5+3*2"),
+    ]),
+    ("SYSTEM", [
+        ("F1", "ta pomoc"),
+        ("Ctrl+L", "wyloguj"),
+        ("Ctrl+Q", "wyjście"),
+    ]),
+]
+
+
+class HelpModal(ModalScreen[None]):
+    BINDINGS = [("escape", "close", "Zamknij"), ("f1", "close", "Zamknij"), ("enter", "close", "Zamknij"),
+                ("q", "close", "Zamknij")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help-dialog", classes="modal-dialog"):
+            yield Label("POMOC — SKRÓTY KLAWISZOWE", id="modal-msg")
+            with VerticalScroll(id="help-body"):
+                for title, rows in HELP_SECTIONS:
+                    yield Label(title, classes="separator-line")
+                    for key, desc in rows:
+                        line = Text()
+                        line.append(f"{key:>12}  ", style="bold #00FF41")
+                        line.append(desc, style="#dddddd")
+                        yield Label(line, classes="help-row")
+            with Horizontal(id="modal-btns"):
+                yield Button("ZAMKNIJ (ESC)", id="btn-close", classes="btn-green")
+
+    def on_mount(self) -> None:
+        self.query_one("#btn-close", Button).focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(None)

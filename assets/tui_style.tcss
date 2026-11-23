@@ -1,424 +1,569 @@
 /* ==========================================================================
-   GŁÓWNE USTAWIENIA EKRANU
+   MATRIX FINANCE — STYLE
+   --------------------------------------------------------------------------
+   Responsywność: aplikacja ustawia na ekranie klasy breakpointów
+     szerokość: -w-xs (<60) | -w-sm (60–99) | -w-md (100–149) | -w-lg (150+)
+     wysokość:  -h-xs (<24) | -h-sm (24–31) | -h-md (32–44)   | -h-lg (45+)
+   oraz MainDashboard.-compact, gdy menu boczne jest schowane.
    ========================================================================== */
+
+$mx-green: #00FF41;
+$mx-green-mid: #00AA2B;
+$mx-green-dim: #008822;
+$mx-green-dark: #004411;
+$mx-green-deep: #002200;
+$mx-bg: #000000;
+$mx-panel: #050505;
+$mx-field: #1c1c1c;
+$mx-field-focus: #2e2e2e;
+$mx-muted: #888888;
+$mx-faint: #555555;
+$mx-red: #FF3333;
+$mx-red-dark: #330000;
+$mx-gold: #FFD700;
+
 * {
     scrollbar-size: 0 0;
+    scrollbar-background: $mx-bg;
+    scrollbar-background-hover: $mx-bg;
+    scrollbar-color: $mx-green-dark;
+    scrollbar-color-hover: $mx-green-dim;
+    scrollbar-color-active: $mx-green;
 }
 
 Screen {
-    background: #000000;
+    background: $mx-bg;
     align: center middle;
+}
+
+/* Widoki przewijane dostają cienki pasek przewijania (żeby było widać, że jest więcej treści) */
+.form-view, DashboardView, #help-body {
+    scrollbar-size-vertical: 1;
 }
 
 /* ==========================================================================
-   MODUŁY (KLASY OGÓLNE)
+   ELEMENTY OGÓLNE
    ========================================================================== */
 .yellow-box {
-    border: double #00FF41;
+    border: double $mx-green;
     padding: 1 2;
-    background: #000000;
+    background: $mx-bg;
 }
-
-#login-center {
-    width: 100%;
-    height: 100%;
-    align: center middle;
-}
-
-#login-wrapper {
-    width: 56;
-    height: 14;
-    layout: vertical;
-    overflow: hidden;
-}
+.-w-xs .yellow-box { padding: 0 1; }
 
 .box-title {
     width: 100%;
     text-align: center;
     text-style: bold;
-    color: #00FF41;
+    color: $mx-green;
     margin-bottom: 1;
 }
 
 .standard-input {
     height: 1;
     border: none;
-    background: #1a1a1a;
+    background: $mx-field;
     color: white;
     margin-bottom: 1;
+    padding: 0 1;
 }
-.standard-input:focus {
-    background: #333333;
-    color: #ffffff;
-}
-.standard-input .input--placeholder {
-    color: #555555;
-    text-style: italic;
-}
+.standard-input:focus { background: $mx-field-focus; color: #ffffff; }
+.standard-input > .input--placeholder { color: $mx-faint; text-style: italic; }
 
 Button {
     height: 1;
+    min-width: 0;
     border: none;
+    padding: 0;  /* line-pad: 1 (domyślny) daje 1 znak odstępu z każdej strony */
     color: white;
     text-style: bold;
 }
+Button:focus { text-style: bold underline; }
 
-.btn-green { background: #008822; }
-.btn-green:hover { background: #00FF41; color: black; }
-
+.btn-green { background: $mx-green-dim; }
+.btn-green:hover, .btn-green:focus { background: $mx-green; color: black; }
 .btn-red { background: #880000; }
-.btn-red:hover { background: #FF0000; color: white; }
+.btn-red:hover, .btn-red:focus { background: #FF0000; color: white; }
+
+.btn-link {
+    background: transparent;
+    border: none;
+    color: $mx-green;
+    text-style: bold;
+    width: 100%;
+    content-align: center middle;
+}
+.btn-link:hover, .btn-link:focus { color: #FFFFFF; background: transparent; text-style: bold underline; }
+
+.info-text { width: 100%; text-align: center; color: $mx-muted; margin: 1 0; }
+.dim-text { color: $mx-faint; text-style: italic; padding: 0 1; }
+.hidden { display: none; }
 
 /* ==========================================================================
-   PLANSZA LOGO (WELCOME)
+   EKRAN POWITALNY + KREATOR
    ========================================================================== */
-#main-bundle { width: 50; height: auto; align: center middle; }
-#ascii-logo { color: #00FF41; width: 50; text-align: center; margin-bottom: 1; }
+#main-bundle { width: 50; max-width: 100%; height: auto; align: center middle; }
+#ascii-logo { color: $mx-green; width: 100%; text-align: center; margin-bottom: 1; }
+.-w-xs #ascii-logo { display: none; }
+#tagline { width: 100%; text-align: center; color: $mx-green-dim; margin-bottom: 1; }
 
 #start-btn {
     background: transparent;
-    border: none;
-    width: 50;
-    height: 1;
-    color: #008822;
-    text-style: bold;
+    width: 100%;
+    color: $mx-green-dim;
     content-align: center middle;
 }
-#start-btn:hover { background: transparent; color: #00FF41; }
+#start-btn:hover, #start-btn:focus { background: transparent; color: $mx-green; text-style: bold; }
+#start-btn.blink { color: $mx-green; }
 
-#start-btn.blink { color: #00FF41; text-style: bold; }
-#start-btn.blink:hover { color: #00FF41; }
+#wizard-bundle { width: 100%; height: 100%; align: center middle; background: $mx-bg; }
+#wizard-window { width: 64; max-width: 100%; height: auto; max-height: 100%; }
+#wizard-actions {
+    width: 100%;
+    height: 1;
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 1fr 1fr;
+    grid-gutter: 0 2;
+    margin-top: 1;
+}
+#wizard-actions Button { width: 100%; }
 
 /* ==========================================================================
-   UKŁAD LOGOWANIA
+   LOGOWANIE
    ========================================================================== */
+#login-center { width: 100%; height: 100%; align: center middle; }
+#login-wrapper { width: 60; max-width: 100%; height: auto; }
+
 #login-actions {
     layout: grid;
     grid-size: 2;
     grid-columns: 1fr 1fr;
-    grid-gutter: 1;
+    grid-gutter: 0 2;
     margin-top: 1;
     height: 1;
     width: 100%;
 }
-
-#login-actions Button {
-    width: 100%;
-    height: 1;
-    content-align: center middle;
-}
+#login-actions Button { width: 100%; }
+#login-extra { margin-top: 1; width: 100%; height: auto; }
 
 /* ==========================================================================
-   UKŁAD DASHBOARD (MAIN)
+   GŁÓWNY UKŁAD (MainDashboard)
    ========================================================================== */
 MainDashboard {
     layout: grid;
     grid-size: 2 2;
-    grid-columns: 17 1fr;
+    grid-columns: 20 1fr;
     grid-rows: 1fr 1;
-    background: #000000;
+    background: $mx-bg;
 }
+MainDashboard.-compact {
+    grid-size: 1 2;
+    grid-columns: 1fr;
+}
+MainDashboard.-compact #sidebar { display: none; }
 
 #sidebar {
-    background: #000000;
+    background: $mx-bg;
     padding: 0 1;
     row-span: 2;
+    border-right: vkey $mx-green-dark;
 }
 
 #app-title {
     width: 100%;
     text-align: center;
-    color: #000000;
-    background: #00FF41;
+    color: $mx-bg;
+    background: $mx-green;
     text-style: bold;
-    height: 1;
-    margin-bottom: 2;
 }
-
-.menu-spacer { height: 1; }
-.spacer { height: 1fr; }
+#app-version { width: 100%; text-align: center; color: $mx-faint; margin-bottom: 1; }
+.-h-xs #app-version { display: none; }
 
 .sidebar-btn {
     width: 100%;
-    height: 1;
-    border: none;
-    background: #000000;
-    color: #00FF41;
+    background: $mx-bg;
+    color: $mx-green;
+    content-align: left middle;
     text-align: left;
-    padding-left: 1;
     margin-bottom: 1;
+    text-style: none;
 }
+.-h-xs .sidebar-btn, .-h-sm .sidebar-btn { margin-bottom: 0; }
+.sidebar-btn:hover { background: #1a1a1a; color: white; }
+.sidebar-btn.active { background: $mx-green-deep; color: white; text-style: bold; }
+.sidebar-btn:focus { background: $mx-green; color: $mx-bg; text-style: bold; }
 
-.sidebar-btn:hover {
-    background: #1a1a1a;
-    color: white;
-}
-.sidebar-btn:focus {
-    background: #00FF41;
-    color: #000000;
-    text-style: bold;
-}
+.spacer { height: 1fr; }
+#sidebar-hint { color: $mx-faint; width: 100%; text-align: center; }
+.-h-xs #sidebar-hint, .-h-sm #sidebar-hint { display: none; }
 
-.sidebar-btn.active {
-    background: #111111;
-    color: #ffffff;
-    text-style: bold;
-    border: none;
-}
+#right-panel { width: 1fr; height: 1fr; background: $mx-bg; }
 
-.sidebar-btn.active.kbd-focus {
-    background: #ffffff;
-    color: #000000;
-    text-style: bold;
-}
-
-
-#right-panel {
-    width: 100%;
-    height: 100%;
-    background: #000000;
-    padding: 0;
-}
-
-#header {
-    height: 1;
-    width: 100%;
-    background: #000000;
-    padding-left: 1;
-    padding-right: 1;
-}
-
+#header { height: 1; width: 100%; background: $mx-bg; padding: 0 1; }
 #header-title {
     width: 1fr;
-    content-align: left middle;
-    color: #00FF41;
+    color: $mx-green;
     text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
+#header-nav { display: none; width: auto; margin-right: 1; }
+MainDashboard.-compact #header-nav { display: block; }
+#header-clock { width: auto; color: $mx-green-mid; }
 
-#header-clock {
-    width: auto;
-    content-align: right middle;
-    color: #00FF41;
-}
-
-#content-frame {
-    width: 100%;
-    height: 1fr;
-    border: none;
-    background: #000000;
-    margin: 0;
-    padding: 0;
-}
-
-#content-frame > * {
-    border: solid #00FF41;
-}
+#content-frame { width: 100%; height: 1fr; background: $mx-bg; }
+#content-frame > * { border: solid $mx-green; }
+#content-frame > DashboardView { border: none; }
+.-h-xs #content-frame > * { border: none; }
 
 /* ==========================================================================
-   FOOTER (STOPKA)
+   STOPKA
    ========================================================================== */
-#footer {
-    background: #008822;
-    width: 100%;
-    height: 1;
-    layout: horizontal;
-    overflow: hidden;
-}
-
-#footer-dynamic { width: auto; height: 1; }
+#footer { background: $mx-green-dim; width: 100%; height: 1; layout: horizontal; overflow: hidden; }
+#footer-dynamic, #footer-static { width: auto; height: 1; }
 .footer-spacer { width: 1fr; height: 1; background: transparent; }
-#footer-static { width: auto; height: 1; align: right middle; }
-
 .footer-btn {
     width: auto;
-    min-width: 6;
+    height: 1;
+    background: $mx-green-dim;
+    color: white;
+    margin-right: 1;
+}
+.footer-btn:hover { background: $mx-green-mid; }
+.footer-btn:focus { background: $mx-green-dark; text-style: bold; }
+
+/* ==========================================================================
+   NAGŁÓWKI WIDOKÓW Z TABELAMI
+   ========================================================================== */
+.view-header {
+    height: 1;
+    width: 100%;
+    background: #111111;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+.-h-xs .view-header, .-h-sm .view-header { margin-bottom: 0; }
+.view-header-title { width: 1fr; color: white; text-style: bold; text-wrap: nowrap; text-overflow: ellipsis; }
+.view-header-stats { width: auto; height: 1; }
+.-w-xs .view-header-title { display: none; }
+.stat-label { color: $mx-muted; margin: 0 1 0 2; }
+.stat-value { text-style: bold; }
+.stat-value.income { color: $mx-green; }
+.stat-value.expense { color: $mx-red; }
+.stat-value.savings { color: $mx-gold; }
+.-w-xs .stat-label { margin: 0 1 0 0; }
+
+/* Transakcje – pasek narzędzi */
+.toolbar { height: 1; width: 100%; margin-bottom: 1; }
+.-h-xs .toolbar, .-h-sm .toolbar { margin-bottom: 0; }
+#trans-search {
+    width: 1fr;
+    min-width: 10;
     height: 1;
     border: none;
-    background: #008822;
-    color: white;
+    padding: 0 1;
+    background: $mx-field;
+    color: $mx-green;
+}
+#trans-search:focus { background: $mx-field-focus; color: white; }
+#trans-search > .input--placeholder { color: $mx-faint; }
+#trans-cat-select, #trans-acc-select { width: 24; height: 1; margin-left: 1; }
+#trans-acc-select { width: 20; }
+#trans-sum-label { width: auto; height: 1; margin-left: 1; text-wrap: nowrap; }
+TransactionsView.-narrow #trans-acc-select { display: none; }
+TransactionsView.-narrow #trans-cat-select { width: 20; }
+TransactionsView.-tiny #trans-cat-select { width: 14; }
+
+/* Select w stylu terminala (dotyczy filtrów i formularzy) */
+Select { height: 1; }
+Select > SelectCurrent {
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $mx-field;
+    color: $mx-green;
+}
+Select:focus > SelectCurrent { background: $mx-field-focus; color: white; border: none; }
+Select > SelectCurrent > .arrow { color: $mx-green; }
+Select > SelectCurrent Static#label { color: $mx-green; }
+Select:focus > SelectCurrent Static#label { color: white; }
+Select > SelectOverlay {
+    background: $mx-bg;
+    color: $mx-green;
+    border: solid $mx-green;
+    max-height: 12;
+}
+Select > SelectOverlay:focus { border: solid $mx-green; }
+
+/* ==========================================================================
+   TABELE (DataTable / SmartTable)
+   ========================================================================== */
+DataTable { background: $mx-bg; color: $mx-green; border: none; }
+DataTable > .datatable--header { background: $mx-green-dark; color: white; text-style: bold; }
+DataTable > .datatable--header-hover { background: $mx-green-dim; color: white; }
+DataTable > .datatable--even-row { background: $mx-bg; }
+DataTable > .datatable--odd-row { background: #061a08; }
+DataTable > .datatable--cursor { background: $mx-green; color: black; text-style: bold; }
+DataTable:blur > .datatable--cursor { background: $mx-green-dark; color: white; }
+DataTable > .datatable--hover { background: #0d2a10; }
+
+#pagination-bar { height: 1; width: 100%; background: $mx-bg; align: center middle; }
+#page-info { width: auto; padding: 0 2; color: $mx-green; text-style: bold; }
+.page-btn { min-width: 4; height: 1; margin: 0 1; background: $mx-green-dark; color: white; }
+.page-btn:hover, .page-btn:focus { background: $mx-green; color: black; }
+.page-btn:disabled { background: #111111; color: #444444; }
+.-w-xs .page-btn { margin: 0; }
+
+/* ==========================================================================
+   FORMULARZE (transakcja, kategoria, cel, zlecenie, raporty, ustawienia)
+   ========================================================================== */
+.form-view { width: 100%; height: 100%; align-horizontal: center; padding: 0 1; }
+
+.form-header {
+    width: 100%;
+    max-width: 96;
+    text-align: center;
+    color: $mx-green;
     text-style: bold;
-    content-align: center middle;
-    margin-right: 1;
+    border-bottom: solid $mx-green-dark;
+    margin-bottom: 1;
+}
+.-h-xs .form-header { border-bottom: none; margin-bottom: 0; }
+
+.form-row {
+    width: 100%;
+    max-width: 96;
+    height: 1;
+    margin-bottom: 1;
+}
+.-h-xs .form-row, .-h-sm .form-row { margin-bottom: 0; }
+
+.row-label {
+    width: 22;
+    height: 1;
+    padding-right: 1;
+    text-align: right;
+    color: $mx-muted;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+.-w-xs .row-label { width: 14; }
+
+.row-input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: $mx-field;
+    color: $mx-green;
     padding: 0 1;
 }
+.row-input:focus { background: $mx-field-focus; color: #ffffff; }
+.row-input > .input--placeholder { color: $mx-faint; text-style: italic; }
 
-.footer-btn:hover { background: #00FF41; color: black; }
-/* ==========================================================================
-   TRANSAKCJE - TOOLBAR
-   ========================================================================== */
-#trans-toolbar {
-    dock: top; height: 2; width: 100%; background: #000000; margin: 0; padding: 0;
-}
-#trans-search {
-    width: 1fr; height: 1; border: none; background: #000000; color: #00FF41;
-}
-#trans-search:focus { border: none; }
-#trans-search .input--placeholder { color: #555555; }
+.row-select { width: 1fr; }
 
-#trans-cat-select {
-    width: 30%; height: 1; border: none; background: #000000;
-    border-left: solid #00FF41; border-right: solid #00FF41;
-}
-#trans-cat-select SelectCurrent {
-    background: #000000; color: #00FF41; border: none; height: 1; padding: 0 1;
-}
-#trans-cat-select SelectCurrent .arrow { color: #00FF41 !important; }
-SelectOverlay { background: #000000; color: #00FF41; border: solid #00FF41; }
-
-#trans-sum-label {
-    width: 1fr; height: 1; content-align: right middle; color: #00FF41; text-style: bold; padding-right: 1;
+.row-value {
+    width: 1fr;
+    height: 1;
+    padding: 0 1;
+    color: white;
+    background: #0b0b0b;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
-/* ==========================================================================
-   KATEGORIE - HEADER
-   ========================================================================== */
-#cat-header-panel {
-    height: 2; width: 100%; background: #111111; align: left middle; layout: horizontal;
+.checkbox-row Checkbox {
+    width: 1fr;
+    height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $mx-green;
 }
-.cat-header-title {
-    width: 1fr; height: 100%; content-align: left middle; color: white; text-style: bold; padding-left: 2;
+.checkbox-row Checkbox:focus { text-style: bold; background: $mx-field-focus; }
+Checkbox > .toggle--button, Checkbox:focus > .toggle--button { color: #3a3a3a; background: #3a3a3a; }
+Checkbox.-on > .toggle--button, Checkbox.-on:focus > .toggle--button { color: $mx-bg; background: $mx-green; }
+
+.form-hint { width: 100%; max-width: 96; color: $mx-faint; text-align: center; margin-top: 1; }
+.-h-xs .form-hint, .-w-xs .form-hint { display: none; }
+
+.btn-inline {
+    width: 1fr;
+    height: 1;
+    background: #1e1e1e;
+    color: $mx-green;
+    content-align: center middle;
 }
-.cat-stat-box {
-    width: 1fr; height: 100%; layout: horizontal; align: center middle;
+.btn-inline:hover { background: $mx-green; color: black; }
+.btn-inline:focus { background: $mx-green; color: black; text-style: bold; }
+.btn-inline-danger { background: $mx-red-dark; color: $mx-red; }
+.btn-inline-danger:hover, .btn-inline-danger:focus { background: #FF0000; color: white; }
+
+.separator-line {
+    width: 100%;
+    max-width: 96;
+    height: 1;
+    color: $mx-green-dim;
+    text-style: bold;
+    content-align: center middle;
+    text-align: center;
+    background: #070f08;
+    margin-bottom: 1;
 }
-.cat-stat-box:last-of-type { align: right middle; padding-right: 2; }
-.stat-label { color: #888888; margin-right: 1; }
-.stat-value { text-style: bold; }
-.stat-value.income { color: #00FF41; }
-.stat-value.expense { color: #FF0000; }
+.separator-line.danger { color: $mx-red; background: #120404; }
+.-h-xs .separator-line, .-h-sm .separator-line { margin-bottom: 0; }
 
 /* ==========================================================================
-   UNIWERSALNY STYL TABEL (DataTable)
+   RAPORTY
    ========================================================================== */
-DataTable { background: #000000; color: #00FF41; border: none; height: 100%; width: 100%; }
-DataTable > .datatable--header { background: #004411; color: white; text-style: bold; }
-DataTable > .datatable--header-hover { background: #008822; color: white; }
-DataTable > .datatable--even { background: #000000; }
-DataTable > .datatable--odd { background: #051a05; }
-DataTable > .datatable--cursor { background: #00FF41; color: black; text-style: bold; }
+#rep-grid, #rep-top-grid {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 1fr 1fr;
+    grid-gutter: 0 2;
+    width: 100%;
+    height: auto;
+}
+#rep-top-grid { margin-top: 1; }
+.-w-xs #rep-grid, .-w-sm #rep-grid, .-w-xs #rep-top-grid, .-w-sm #rep-top-grid { grid-size: 1; grid-columns: 1fr; }
+.rep-col { width: 100%; height: auto; }
+.rep-col .form-row, .rep-col .separator-line { max-width: 100%; }
+.rep-col .row-label { width: 20; }
+.rep-col .form-row { margin-bottom: 0; }
+.rep-col .separator-line { margin: 1 0 0 0; }
+.-w-xs .rep-col .row-label { width: 14; }
+.rep-top-list { height: auto; width: 100%; }
+.top-row { height: 1; width: 100%; }
+.top-name { width: 1fr; min-width: 8; color: #dddddd; text-wrap: nowrap; text-overflow: ellipsis; }
+.top-value { width: 13; text-align: right; color: white; margin-right: 1; }
+.top-bar { width: 16; }
+.-w-xs .top-bar { display: none; }
 
 /* ==========================================================================
-   PAGINACJA (SmartTable / Transakcje)
+   MODALE
    ========================================================================== */
-#pagination-bar { dock: bottom; height: 1; width: 100%; background: #000000; align: center middle; }
-#page-info { width: 20; content-align: center middle; color: #00FF41; text-style: bold; }
-.page-btn { min-width: 6; height: 1; margin: 0 1; background: #004411; color: white; border: none; }
-.page-btn:hover { background: #00FF41; color: black; }
-.page-btn.-disabled { background: #111111; color: #444444; }
-#table-container { width: 100%; height: 1fr; background: #000000; overflow: hidden; scrollbar-size: 0 0; }
+ModalScreen { align: center middle; background: rgba(0, 0, 0, 0.8); }
+.modal-dialog {
+    width: 64;
+    max-width: 96%;
+    height: auto;
+    max-height: 96%;
+    background: $mx-bg;
+    border: double $mx-green;
+    padding: 1 2;
+}
+.-w-xs .modal-dialog { padding: 0 1; }
+#modal-msg { text-align: center; width: 100%; margin-bottom: 1; color: white; text-style: bold; }
+#modal-chk { width: 100%; height: 1; align: center middle; margin-bottom: 1; }
+#modal-chk Checkbox { width: auto; height: 1; background: transparent; border: none; padding: 0; color: $mx-muted; }
+#modal-chk Checkbox:focus, #modal-chk Checkbox.-on { color: $mx-green; text-style: bold; }
+#modal-btns { width: 100%; height: 1; align: center middle; margin-top: 1; }
+#modal-btns Button { margin: 0 1; min-width: 10; }
+
+#help-dialog { width: 72; height: auto; max-height: 96%; }
+#help-body { height: auto; max-height: 70vh; }
+#help-body .separator-line { margin: 0; }
+.help-row { width: 100%; }
 
 /* ==========================================================================
-   FORMULARZE (kompaktowe, szare paski)
+   PULPIT
    ========================================================================== */
-#form-scroll-container { width: 100%; align: center top; padding: 1 0; background: #000000; }
-.form-header { width: 100%; text-align: center; color: #00FF41; text-style: bold; border-bottom: solid #004411; margin-bottom: 1; }
-.form-row { width: 80%; height: 1; margin: 1; }
-.row-label { width: 30%; height: 1; content-align: right middle; padding-right: 2; color: #888888; background: #000000; }
-.row-input { width: 70%; height: 1; border: none; background: #222222; color: #00FF41; padding: 0 1; }
-.row-input:focus { background: #333333; color: #ffffff; }
-.row-select { width: 70%; height: 1; border: none; background: #222222; color: #00FF41; }
-.row-select:focus { background: #333333; }
-.row-select SelectCurrent { border: none; background: transparent; color: #00FF41; height: 1; padding: 0 1; content-align: left middle; }
-.row-select SelectCurrent .arrow { color: #00FF41 !important; }
-.checkbox-row { height: 1; margin-top: 1; }
-.checkbox-row Checkbox { width: 70%; height: 1; background: transparent; border: none; color: #00FF41; }
+DashboardView { width: 100%; height: 100%; }
 
-/* ==========================================================================
-   USTAWIENIA / PRZYCISKI INLINE
-   ========================================================================== */
-.btn-inline { width: 70%; height: 1; border: none; background: #222222; color: #00FF41; text-style: bold; content-align: center middle; }
-.btn-inline:hover { background: #00FF41; color: black; }
-.btn-inline-danger { background: #330000; color: #FF0000; }
-.btn-inline-danger:hover { background: #FF0000; color: white; }
-.separator-line { width: 100%; height: 1; color: #004411; content-align: center middle; margin-top: 1; margin-bottom: 0; }
-#chk-container, #chk-container-2 { align: left middle; padding-left: 1; }
-#chk-container Checkbox, #chk-container-2 Checkbox { background: transparent; border: none; height: 1; width: 100%; color: #00FF41; }
-#chk-container Checkbox:focus > .toggle--label, #chk-container-2 Checkbox:focus > .toggle--label { text-style: bold; color: white; }
+#dash-grid {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 2fr 3fr;
+    grid-rows: auto 1fr 1fr;
+    grid-gutter: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 22;
+}
+/* bardzo szeroko: 3 kolumny, 2 rzędy */
+MainDashboard.-w-lg #dash-grid {
+    grid-size: 3;
+    grid-columns: 1fr 1fr 1fr;
+    grid-rows: auto 1fr;
+    min-height: 16;
+}
+MainDashboard.-w-lg.-compact #dash-grid { grid-size: 3; }
+/* bardzo wąsko: 1 kolumna, karty jedna pod drugą (pulpit się przewija) */
+MainDashboard.-w-xs #dash-grid {
+    grid-size: 1;
+    grid-columns: 1fr;
+    grid-rows: auto;
+    height: auto;
+}
+MainDashboard.-w-xs .dash-card { height: auto; }
+MainDashboard.-w-xs .simple-list { height: auto; max-height: 8; }
+MainDashboard.-w-xs #card-heatmap { height: 10; }
 
-/* ==========================================================================
-   SKARBONKI / CYKLICZNE - HEADER
-   ========================================================================== */
-#piggy-header-panel { height: 2; width: 100%; background: #111111; layout: horizontal; }
-.piggy-header-title { width: 1fr; height: 100%; content-align: left middle; color: white; text-style: bold; padding-left: 2; }
-.piggy-stat-box { width: 1fr; height: 100%; layout: horizontal; align: right middle; padding-right: 2; }
-.stat-value.savings { color: #FFD700; }
-#rec-header-panel { height: 2; width: 100%; background: #111111; align: center middle; }
-.rec-header-title { color: white; text-style: bold; }
-#rec-chk-container, #pig-chk-container { align: left middle; padding-left: 1; }
-#rec-chk-container Checkbox, #pig-chk-container Checkbox { width: 100%; height: 1; background: transparent; border: none; color: #00FF41; }
-#rec-chk-container Checkbox:focus > .toggle--label, #pig-chk-container Checkbox:focus > .toggle--label { text-style: bold; color: white; }
+.dash-card {
+    background: $mx-panel;
+    border: round $mx-green-dim;
+    border-title-color: $mx-green;
+    border-title-style: bold;
+    border-title-align: center;
+    border-subtitle-color: $mx-muted;
+    border-subtitle-align: right;
+    padding: 0 1;
+    height: 100%;
+    overflow: hidden;
+}
+.dash-card:focus-within { border: round $mx-green; }
 
-/* ==========================================================================
-   MODAL (ConfirmationModal)
-   ========================================================================== */
-ConfirmationModal { align: center middle; background: rgba(0, 0, 0, 0.85); }
-#modal-dialog { width: 45; height: auto; background: #000000; border: double #00FF41; padding: 1 2; align: center middle; }
-#modal-msg { text-align: center; width: 100%; height: auto; margin-top: 1; margin-bottom: 2; color: white; text-style: bold; }
-#modal-chk { width: 100%; height: 1; align: center middle; margin-bottom: 1; background: transparent; border: none; }
-#modal-chk Checkbox { width: auto; height: 1; background: transparent; border: none; padding: 0; color: #888888; }
-#modal-chk Checkbox:focus, #modal-chk Checkbox.-on { color: #00FF41; text-style: bold; background: transparent; }
-#modal-chk Checkbox > .toggle--label { color: #00FF41; }
-#modal-btns { width: 100%; height: 1; align: center bottom; margin-top: 1; }
-#modal-btns Button { margin: 0 1; min-width: 8; }
+#card-resources, #card-status { height: auto; }
 
-/* ==========================================================================
-   DASHBOARD (PULPIT) - STYLES
-   ========================================================================== */
-#dash-grid { layout: grid; grid-size: 2 4; grid-columns: 35% 65%; grid-rows: auto 1fr 1fr auto; grid-gutter: 0 0; background: #000000; padding: 0; margin: 0; height: 100%; }
-.dash-card { background: #050505; border: solid #00FF41; padding: 0 1; height: 100%; overflow: hidden; }
-.card-header { width: 100%; text-align: center; background: #002200; color: #00FF41; text-style: bold; dock: top; }
-.header-spacer { height: 1; background: transparent; }
-.simple-list { width: 100%; height: 1fr; overflow-y: auto; padding: 0 1; }
-.uni-row { width: 100%; height: 1; layout: horizontal; margin-bottom: 0; align: left middle; }
-.uni-name { width: auto; height: 1; color: #dddddd; content-align: left middle; margin-right: 1; }
-.uni-bar-track { height: 1; background: #1a1a1a; overflow: hidden; margin: 0 0 0 1; }
-.stat-row, .res-row { width: 100%; height: 1; layout: horizontal; padding: 0 1; }
-.stat-lbl, .res-lbl { dock: left; width: 14; height: 1; content-align: left middle; color: #888888; }
-.stat-val, .res-val { dock: right; width: auto; height: 1; content-align: right middle; text-style: bold; color: white; }
-#card-status .stat-val { width: 12; content-align: right middle; }
-#card-status .stat-lbl { text-style: bold; }
-.res-total { dock: bottom; width: 100%; height: 1; color: white; text-style: bold; content-align: center middle; margin-top: 1; }
-#row-consumption { layout: horizontal; height: 1; width: 100%; padding: 0 1; }
-#bar-consumption { width: 1fr; height: 1; content-align: left middle; text-overflow: clip; }
-#val-consumption { width: 9; content-align: right middle; margin-left: 1; }
-.alert-row { width: 100%; height: 1; background: #000000; padding: 0 1; margin-bottom: 0; }
-.alert-name { dock: left; width: auto; color: #dddddd; content-align: left middle; }
-.alert-days { dock: right; width: auto; color: yellow; text-style: bold; content-align: right middle; }
-.log-row, .pig-row-flex { height: 1 !important; width: 100%; layout: horizontal; margin-bottom: 0; padding: 0; background: transparent; }
-.log-shop { color: #dddddd !important; text-style: bold; }
-.log-date, .pig-pct { color: #888888 !important; }
-#list-alerts, #list-logs, #list-piggy, #list-categories { height: 1fr !important; width: 100%; background: #050505; overflow-y: auto; }
-#view-pulpit { height: 100%; width: 100%; border: none !important; }
+.kv-list { height: auto; }
+.kv-row { width: 100%; height: 1; }
+.kv-key { width: 1fr; min-width: 6; color: $mx-muted; text-wrap: nowrap; text-overflow: ellipsis; }
+.kv-val { width: auto; margin-left: 1; color: white; text-style: bold; text-align: right; }
+.kv-val.negative { color: $mx-red; }
+.kv-dim .kv-key, .kv-dim .kv-val { color: $mx-gold; text-style: none; }
+.kv-total { border-top: solid $mx-green-dark; height: 2; }
+.-h-xs .kv-total, .-h-sm .kv-total { border-top: none; height: 1; }
+.kv-total .kv-key { color: white; text-style: bold; }
+.kv-total .kv-val { color: $mx-green; }
+#row-consumption .kv-key { width: 10; }
+#bar-consumption { width: 1fr; }
 
-/* HEATMAPA */
-#card-heatmap { align: center top; }
-#calendar-grid { layout: grid; grid-size: 7; grid-gutter: 0 0; grid-columns: 5 5 5 5 5 5 5; width: auto; height: auto; margin-top: 0; padding: 0; }
-.cal-day { width: 100%; height: 3; content-align: center middle; }
-.cal-header { width: 100%; text-align: center; color: #444444; margin-bottom: 0; }
+.simple-list { width: 100%; height: 1fr; overflow-y: auto; }
+
+.alert-row { width: 100%; height: 1; }
+.alert-name { width: 1fr; min-width: 6; color: #dddddd; text-wrap: nowrap; text-overflow: ellipsis; }
+.alert-amount { width: auto; margin-left: 1; }
+.alert-days { width: 10; text-align: right; color: $mx-muted; }
+.alert-days.soon { color: $mx-gold; text-style: bold; }
+.alert-days.overdue { color: $mx-red; text-style: bold; }
+DashboardView.-narrow .alert-amount { display: none; }
+
+.uni-row { width: 100%; height: 1; }
+.uni-name { height: 1; color: #dddddd; margin-right: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+
+/* HEATMAPA — siatka 7 kolumn x (nagłówek + tygodnie), komórki rozciągają się do karty */
+#card-heatmap { align: center middle; }
+#calendar-grid {
+    layout: grid;
+    grid-size: 7;
+    grid-columns: 1fr;
+    grid-gutter: 0;
+    width: 100%;
+    max-width: 84;
+    height: 100%;
+    max-height: 31;
+}
+.cal-header { width: 1fr; height: 1; text-align: center; color: $mx-faint; }
+#calendar-grid.-no-header .cal-header { display: none; }
+.cal-day { width: 1fr; height: 1fr; content-align: center middle; }
 .cal-day.empty { background: transparent; }
-.cal-day.neutral { background: #111111; color: #333333; }
-.cal-day.low { background: #003300; color: #666666; }
-.cal-day.med { background: #006600; color: #aaaaaa; }
-.cal-day.high { background: #00AA00; color: white; text-style: bold; }
-.cal-day.today-purple { background: #8800FF; color: white; text-style: bold; }
+.cal-day.neutral { background: #101010; color: #3a3a3a; }
+.cal-day.low { background: #003300; color: #8a8a8a; }
+.cal-day.med { background: #006611; color: #cccccc; }
+.cal-day.high { background: #00AA2B; color: white; text-style: bold; }
+.cal-day.today { background: #8800FF; color: white; text-style: bold; }
 
-/* ==========================================================================
-   RAPORTY - SIATKA 2 KOLUMNY
-   ========================================================================== */
-#rep-grid { layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1 2; width: 100%; }
-#rep-left, #rep-right { width: 100%; }
-#rep-left .form-row, #rep-right .form-row { margin: 0; }
-
-/* ==========================================================================
-   TEKSTY OGÓLNE I WIZARD (KREATOR KONTA)
-   ========================================================================== */
-.info-text { width: 100%; text-align: center; color: #555555; margin-top: 2; }
-#login-extra { margin-top: 1; width: 100%; content-align: center middle; }
-.btn-link { background: transparent; border: none; color: #00FF41; text-style: bold; height: 1; width: auto; content-align: center middle; }
-.btn-link:hover { color: #FFFFFF; background: transparent; }
-.hidden { display: none; }
-
-#wizard-bundle { width: 100%; height: 100%; align: center middle; background: #000000; }
-#wizard-window { width: 60; height: auto; padding-bottom: 1; }
-#wizard-actions { width: 100%; layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 1; margin-top: 1; }
-#wizard-actions Button { width: 100%; content-align: center middle; }
+/* -w-lg: karta „Nadchodzące” trafia do pierwszego (auto) rzędu — ograniczamy jej wysokość */
+MainDashboard.-w-lg #card-alerts { height: auto; max-height: 12; }
+MainDashboard.-w-lg #card-alerts .simple-list { height: auto; max-height: 8; }

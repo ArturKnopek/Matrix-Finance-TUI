@@ -7,6 +7,7 @@ from textual.app import ComposeResult
 from textual.widgets import Static, Button, Label, Input
 from textual.containers import Vertical, Container, Horizontal
 
+from src.utils.parsing import AMOUNT_RESTRICT, parse_amount
 from src.database import (
     get_setting,
     set_setting,
@@ -45,7 +46,8 @@ class WelcomeScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="main-bundle"):
             yield Static(LOGO, id="ascii-logo")
-            yield Button("KLIKNIJ ABY ROZPOCZĄĆ", id="start-btn")
+            yield Label("MATRIX FINANCE · osobisty budżet w terminalu", id="tagline")
+            yield Button("▶  ROZPOCZNIJ  (ENTER)", id="start-btn")
 
         with Container(id="wizard-bundle", classes="hidden"):
             with Container(id="wizard-window", classes="yellow-box"):
@@ -55,15 +57,17 @@ class WelcomeScreen(Screen):
                 yield Input(placeholder="Hasło", password=True, id="w-pass-1", classes="standard-input")
                 yield Input(placeholder="Powtórz hasło", password=True, id="w-pass-2", classes="standard-input")
 
-                yield Label("--- SALDO POCZĄTKOWE ---", classes="separator-line")
+                yield Label("SALDO POCZĄTKOWE", classes="separator-line")
 
-                with Horizontal(classes="form-row"):
+                with Horizontal(classes="form-row wizard-row"):
                     yield Label("Karta:", classes="row-label")
-                    yield Input(placeholder="np. 3000.00", id="w-start-card", classes="row-input")
+                    yield Input(placeholder="np. 3000.00", id="w-start-card", classes="row-input",
+                                restrict=AMOUNT_RESTRICT)
 
-                with Horizontal(classes="form-row"):
+                with Horizontal(classes="form-row wizard-row"):
                     yield Label("Gotówka:", classes="row-label")
-                    yield Input(placeholder="np. 200.00", id="w-start-cash", classes="row-input")
+                    yield Input(placeholder="np. 200.00", id="w-start-cash", classes="row-input",
+                                restrict=AMOUNT_RESTRICT)
 
                 with Horizontal(id="wizard-actions"):
                     yield Button("UTWÓRZ KONTO", id="btn-w-create", classes="btn-green")
@@ -150,17 +154,25 @@ class WelcomeScreen(Screen):
                 pass
 
     def _read_float(self, input_id: str) -> float | None:
-        try:
-            raw = self.query_one(input_id, Input).value.strip().replace(",", ".")
-            if raw == "":
-                return 0.0
-            val = float(raw)
-            # Zabezpieczenie przed błędem z 'inf' i ujemnymi stawkami
-            if math.isinf(val) or math.isnan(val) or val < 0:
-                return None
-            return val
-        except Exception:
+        raw = self.query_one(input_id, Input).value.strip()
+        if raw == "":
+            return 0.0
+        val = parse_amount(raw)
+        if val is None or math.isinf(val) or math.isnan(val) or val < 0:
             return None
+        return val
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter przechodzi do kolejnego pola; w ostatnim tworzy konto."""
+        order = ["#w-username", "#w-pass-1", "#w-pass-2", "#w-start-card", "#w-start-cash"]
+        current = f"#{event.input.id}"
+        if current not in order:
+            return
+        event.stop()
+        if order.index(current) < len(order) - 1:
+            self.query_one(order[order.index(current) + 1], Input).focus()
+        else:
+            self._create_account()
 
     def _create_account(self) -> None:
         username = self.query_one("#w-username", Input).value.strip()
@@ -182,7 +194,7 @@ class WelcomeScreen(Screen):
             return
 
         if start_card is None or start_cash is None:
-            self.notify("Wpisz poprawne liczby (większe od zera) dla sald startowych.", severity="error")
+            self.notify("Wpisz poprawne kwoty (nieujemne) dla sald startowych.", severity="error")
             return
 
         try:
