@@ -30,7 +30,7 @@ def main() -> int:
     _setup_logging()
 
     # Importy po ustawieniu sys.path (bezpieczniej)
-    from src.database import init_auth_db
+    from src.finance.storage import init_auth_db
     from src.app import MatrixApp
 
     logging.info(">>> [BOOT] Sprawdzanie spójności bazy danych...")
@@ -49,7 +49,7 @@ def main() -> int:
         return 1
 
     try:
-        from src.database import get_setting
+        from src.finance.storage import get_setting
         from src.utils.logging_setup import apply_debug_logging
 
         if get_setting("dev_mode", "0") == "1":
@@ -64,7 +64,10 @@ def main() -> int:
             logging.getLogger().removeHandler(handler)
 
     app = MatrixApp()
-    app.run()
+    try:
+        app.run()
+    finally:
+        app.close_vault()  # zaszyfrowana baza zawsze zapisana, także po błędzie
     return 0
 
 

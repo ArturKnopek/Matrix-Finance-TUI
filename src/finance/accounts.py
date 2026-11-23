@@ -495,7 +495,7 @@ def get_accounts_overview(active_only: bool = True) -> List[Dict[str, Any]]:
         r["projection"] = deposit_projection(r, today)
         if info.retirement:
             r["contributed_this_year"] = contributions_in_year(r["name"], today.year)
-        if info.has_rate and not info.has_term and r.get("interest_rate"):
+        if info.has_rate and not info.has_term and r.get("interest_rate") and r["balance"] > 0:
             rate, tax = float(r["interest_rate"]), float(r.get("tax_rate") or 0.0)
             r["monthly_interest_net"] = round(r["balance"] * rate / 100 / 12 * (1 - tax / 100), 2)
         out.append(r)

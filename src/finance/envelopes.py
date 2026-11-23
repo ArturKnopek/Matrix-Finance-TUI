@@ -167,9 +167,9 @@ def get_envelope_overview(month: str) -> List[Dict[str, Any]]:
             m = max(since, first)
             while m < month:
                 available = budget + carried
-                carried = max(0.0, available - spending.get((name, m), 0.0))
+                carried = max(0.0, available - max(0.0, spending.get((name, m), 0.0)))
                 m = month_add(m, 1)
-        spent = spending.get((name, month), 0.0)
+        spent = max(0.0, spending.get((name, month), 0.0))  # kategorie dochodowe nie „wydają”
         available = budget + carried
         remaining = available - spent
         pct = (spent / available * 100.0) if available > 0 else None

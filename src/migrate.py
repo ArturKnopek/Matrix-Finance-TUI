@@ -18,7 +18,7 @@ from datetime import datetime
 
 # Importujemy AuthService, żeby hashowanie było spójne z aplikacją
 from src.core.auth import AuthService
-from src.database import AUTH_DB as _AUTH_DB, DATA_DIR, init_auth_db, init_user_db
+from src.finance.storage import AUTH_DB as _AUTH_DB, DATA_DIR, init_auth_db, init_user_db
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OLD_DB = PROJECT_ROOT / "budget.db"             # domyślna lokalizacja starej bazy

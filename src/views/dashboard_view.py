@@ -1,303 +1,237 @@
+"""Pulpit: kafelki KPI, koperty, kalendarz, nadchodzące płatności, doradca, cele, struktura majątku."""
+
 from __future__ import annotations
 
-import calendar
 import logging
-from datetime import date, datetime
 
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Label
 
-from src.database import (
-    get_accounts_overview,
-    get_active_month_str,
-    get_all_categories_data,
-    get_all_piggy_banks,
-    get_category_spending_map,
-    get_daily_spending_map,
-    get_monthly_summary,
-    get_piggy_total,
-    get_upcoming_recurring,
-)
-from src.utils.ui_tools import GREEN, RED, YELLOW, ProgressMeter, WidthClassesMixin, calculate_max_width, money
-from src.views.recurring_view import describe_days
+from src.finance.accounts import KIND_GROUPS, get_accounts_overview, get_net_worth
+from src.finance.analytics import get_calendar_data, get_insights, get_trend, savings_rate
+from src.finance.envelopes import get_budget_summary, get_envelope_overview
+from src.finance.goals import goals_overview
+from src.finance.recurring import get_upcoming_recurring
+from src.finance.storage import get_active_month_str
+from src.ui.theme import palette
+from src.ui.widgets import KpiTile, Meter, MonthCalendar, WidthClassesMixin, calculate_max_width, money
+from src.views.base import ViewAction, ViewMixin
 
-WEEKDAYS = ["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"]
-CAL_CELLS = 42  # 6 tygodni x 7 dni
+INSIGHT_ICONS = {"ok": ("✔", "positive"), "info": ("ℹ", "accent"), "warn": ("▲", "warning"),
+                 "alert": ("✖", "negative")}
 
 
-def _kv_row(key: str, value_id: str, value: str = "...", classes: str = "") -> Horizontal:
-    return Horizontal(
-        Label(key, classes="kv-key"),
-        Label(value, id=value_id, classes="kv-val"),
-        classes=f"kv-row {classes}".strip(),
-    )
+def describe_days(days: int) -> str:
+    if days < 0:
+        return "ZALEGŁE"
+    if days == 0:
+        return "DZIŚ"
+    if days == 1:
+        return "JUTRO"
+    return f"za {days} dni"
 
 
-class DashboardView(WidthClassesMixin, VerticalScroll):
-    """
-    Pulpit. Układ kart dopasowuje się do szerokości terminala (klasy breakpointów
-    na ekranie: 1, 2 lub 3 kolumny), a wszystkie paski i heatmapa skalują się same.
-    """
+class DashboardView(WidthClassesMixin, ViewMixin, VerticalScroll):
+    TITLE = "PULPIT"
+    NARROW_AT = 76
+    ACTIONS = [
+        ViewAction("new", "^N", "NOWA TRANSAKCJA", "NOWA"),
+        ViewAction("transfer", "^T", "PRZELEW", "PRZEL."),
+    ]
 
     def compose(self) -> ComposeResult:
+        with Grid(id="dash-tiles"):
+            yield KpiTile("MAJĄTEK NETTO", id="tile-networth")
+            yield KpiTile("DO WYDANIA", extra="meter", id="tile-budget")
+            yield KpiTile("BILANS MIESIĄCA", id="tile-flow")
+            yield KpiTile("OSZCZĘDZANIE", extra="sparkline", id="tile-savings")
         with Grid(id="dash-grid"):
-            with Vertical(id="card-resources", classes="dash-card"):
-                yield Vertical(id="list-accounts", classes="kv-list")
-                yield _kv_row("W CELACH:", "val-piggy-total", classes="kv-dim")
-                yield _kv_row("MAJĄTEK:", "val-net-worth", classes="kv-total")
-
-            with Vertical(id="card-status", classes="dash-card"):
-                yield _kv_row("PRZYCHÓD:", "val-inc")
-                yield _kv_row("WYDATKI:", "val-exp")
-                with Horizontal(id="row-consumption", classes="kv-row"):
-                    yield Label("ZUŻYCIE:", classes="kv-key")
-                    yield ProgressMeter(0.0, id="bar-consumption")
-                yield _kv_row("PRZEPŁYW:", "val-flow")
-
-            with Vertical(id="card-alerts", classes="dash-card"):
-                yield Vertical(id="list-alerts", classes="simple-list")
-
-            with Vertical(id="card-categories", classes="dash-card"):
-                yield Vertical(id="dash-cats-list", classes="simple-list")
-
+            with Vertical(id="card-envelopes", classes="dash-card"):
+                yield Vertical(id="list-envelopes", classes="card-list")
+            with Vertical(id="card-calendar", classes="dash-card"):
+                yield MonthCalendar(interactive=False, id="dash-calendar")
+            with Vertical(id="card-upcoming", classes="dash-card"):
+                yield Vertical(id="list-upcoming", classes="card-list")
+            with Vertical(id="card-advisor", classes="dash-card"):
+                yield VerticalScroll(id="list-advisor", classes="card-list")
             with Vertical(id="card-goals", classes="dash-card"):
-                yield Vertical(id="list-piggy", classes="simple-list")
-
-            with Vertical(id="card-heatmap", classes="dash-card"):
-                with Grid(id="calendar-grid"):
-                    for day in WEEKDAYS:
-                        yield Label(day, classes="cal-header")
-                    for i in range(CAL_CELLS):
-                        yield Label("", id=f"day-{i}", classes="cal-day empty")
+                yield Vertical(id="list-goals", classes="card-list")
+            with Vertical(id="card-assets", classes="dash-card"):
+                yield Vertical(id="list-assets", classes="card-list")
 
     def on_mount(self) -> None:
-        titles = {
-            "#card-resources": "ZASOBY",
-            "#card-status": "STATUS CYKLU",
-            "#card-alerts": "NADCHODZĄCE OPERACJE",
-            "#card-categories": "STATUS KATEGORII",
-            "#card-goals": "CELE OSZCZĘDNOŚCIOWE",
-            "#card-heatmap": "INTENSYWNOŚĆ WYDATKÓW",
-        }
-        for selector, title in titles.items():
-            self.query_one(selector).border_title = title
+        for card_id, title in (("card-envelopes", "KOPERTY"), ("card-calendar", "KALENDARZ WYDATKÓW"),
+                               ("card-upcoming", "NADCHODZĄCE"), ("card-advisor", "DORADCA"),
+                               ("card-goals", "CELE"), ("card-assets", "STRUKTURA MAJĄTKU")):
+            self.query_one(f"#{card_id}").border_title = title
         self.load_data()
 
+    # ------------------------------------------------------------------ akcje
+
+    def do_new(self) -> None:
+        from src.ui.forms import TransactionDialog
+
+        self.open_dialog(TransactionDialog())
+
+    def do_transfer(self) -> None:
+        from src.ui.forms import TransferDialog
+
+        self.open_dialog(TransferDialog())
+
+    def do_search(self) -> None:
+        self.app.screen.action_search()  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------------ dane
+
     def load_data(self) -> None:
+        month = get_active_month_str()
         with self.app.batch_update():
-            for refresh in (
-                self.refresh_balance,
-                self.refresh_monthly_stats,
-                self.refresh_alerts,
-                self.refresh_categories,
-                self.refresh_piggy_banks,
-                self.refresh_heatmap,
-            ):
+            for part in (self._tiles, self._envelopes, self._calendar, self._upcoming, self._advisor,
+                         self._goals, self._assets):
                 try:
-                    refresh()
-                except Exception as e:  # jeden zepsuty kafelek nie blokuje reszty
-                    logging.exception(f"Błąd odświeżania pulpitu ({refresh.__name__}): {e}")
+                    part(month)
+                except Exception as e:
+                    logging.exception("Błąd pulpitu (%s): %s", part.__name__, e)
 
-    # ------------------------------------------------------------------ ZASOBY
+    def _tiles(self, month: str) -> None:
+        p = palette()
+        nw = get_net_worth()
+        invested = nw["total"] - nw["liquid"] - nw["goals"]
+        self.query_one("#tile-networth", KpiTile).set(
+            Text(money(nw["total"]), style=f"bold {p.accent}"),
+            f"dostępne {money(nw['liquid'], '')} · ulokowane {money(invested + nw['goals'], '')}")
 
-    def refresh_balance(self) -> None:
-        accounts = get_accounts_overview(active_only=True)
-        cont = self.query_one("#list-accounts", Vertical)
+        b = get_budget_summary(month)
+        pct = b["spent"] / b["available"] * 100 if b["available"] > 0 else None
+        tone = "neg" if b["over_count"] else ""
+        sub = f"z {money(b['available'], '')} · przekroczone: {b['over_count']}" if b["available"] > 0 \
+            else "ustaw budżety kopert (zakładka 3)"
+        self.query_one("#tile-budget", KpiTile).set(money(b["remaining"]), sub, tone, pct=pct)
+
+        flow = b["income"] - b["expense"]
+        self.query_one("#tile-flow", KpiTile).set(
+            money(flow, signed=True), f"+{money(b['income'], '')} / −{money(b['expense'], '')}",
+            "pos" if flow >= 0 else "neg")
+
+        trend = get_trend(6, month)
+        rate = savings_rate(b["income"], b["expense"])
+        self.query_one("#tile-savings", KpiTile).set(
+            "—" if rate is None else f"{rate:.0f}%",
+            f"6 mies.: {money(sum(t['saved'] for t in trend), '')}",
+            "" if rate is None else "pos" if rate >= 20 else "warn" if rate >= 0 else "neg",
+            series=[max(0.0, t["saved"]) for t in trend])
+
+    def _envelopes(self, month: str) -> None:
+        cont = self.query_one("#list-envelopes", Vertical)
         cont.remove_children()
-        total = 0.0
+        items = [e for e in get_envelope_overview(month) if e["available"] > 0 or e["spent"] > 0]
+        b = get_budget_summary(month)
+        card = self.query_one("#card-envelopes")
+        card.border_title = f"KOPERTY {month}"
+        card.border_subtitle = f"do rozdysponowania {money(b['unallocated'], '')}" if b["income"] else ""
+        if not items:
+            cont.mount(Label("Brak budżetów — ustaw je w zakładce 3 (Koperty).", classes="dim-text"))
+            return
+        items.sort(key=lambda e: (e["pct"] is None, -(e["pct"] or 0), -e["spent"]))
+        name_w = calculate_max_width([(None, e["name"]) for e in items], 1, 8, 16)
         rows = []
-        for acc in accounts:
-            if acc["include_in_net_worth"]:
-                total += acc["balance"]
-            value = Label(money(acc["balance"], acc["currency"]), classes="kv-val")
-            if acc["balance"] < 0:
-                value.add_class("negative")
-            rows.append(Horizontal(Label(f"{acc['name'].upper()}:", classes="kv-key"), value, classes="kv-row"))
+        for e in items:
+            name = Label(("↻ " if e["rollover"] else "• ") + e["name"], classes="row-name")
+            name.styles.width = name_w
+            left = Label(money(e["remaining"], ""), classes="row-amount")
+            if e["remaining"] < 0:
+                left.add_class("-neg")
+            rows.append(Horizontal(name, Meter(e["pct"], "budget", f"{money(e['spent'])} (bez limitu)"), left,
+                                   classes="card-row"))
+        cont.mount_all(rows)
+
+    def _calendar(self, month: str) -> None:
+        cal = self.query_one("#dash-calendar", MonthCalendar)
+        cal.set_month(month, get_calendar_data(month))
+        y, m = month.split("-")
+        card = self.query_one("#card-calendar")
+        card.border_title = f"KALENDARZ {m}.{y}"
+        card.border_subtitle = "• zlecenie  ◆ lokata  odcień = wydatki"
+
+    def _upcoming(self, month: str) -> None:
+        p = palette()
+        cont = self.query_one("#list-upcoming", Vertical)
+        cont.remove_children()
+        items = []
+        for r in get_upcoming_recurring(limit=12):
+            sign = "+" if r["type"] == "Dochód" else "−"
+            color = p.positive if r["type"] == "Dochód" else \
+                p.transfer if r["type"] in ("Przelew", "Na Skarbonkę") else p.negative
+            items.append((r["days"], r["name"], Text(f"{sign}{money(float(r['amount']), '')}", style=color)))
+        for acc in get_accounts_overview():
+            proj = acc.get("projection")
+            if proj and proj["days_left"] <= 31:
+                items.append((proj["days_left"], f"◆ {acc['name']}",
+                              Text(f"+{money(proj['net_interest'], '')}", style=p.positive)))
+        items.sort(key=lambda x: x[0])
+        if not items:
+            cont.mount(Label("Brak zaplanowanych płatności.", classes="dim-text"))
+            self.query_one("#card-upcoming").border_subtitle = ""
+            return
+        rows = []
+        overdue = 0
+        for days, name, amount in items[:12]:
+            when = Label(describe_days(days), classes="row-when")
+            if days < 0:
+                when.add_class("-neg")
+                overdue += 1
+            elif days <= 1:
+                when.add_class("-warn")
+            rows.append(Horizontal(Label(f"• {name}", classes="row-name-flex"), Label(amount, classes="row-amount"),
+                                   when, classes="card-row"))
+        cont.mount_all(rows)
+        self.query_one("#card-upcoming").border_subtitle = f"zaległe: {overdue}" if overdue else ""
+
+    def _advisor(self, month: str) -> None:
+        p = palette()
+        cont = self.query_one("#list-advisor", VerticalScroll)
+        cont.remove_children()
+        rows = []
+        for tip in get_insights(month)[:8]:
+            icon, color_name = INSIGHT_ICONS.get(tip.level, ("•", "muted"))
+            text = Text()
+            text.append(f"{icon} ", style=f"bold {getattr(p, color_name)}")
+            text.append(tip.text, style=p.text)
+            rows.append(Label(text, classes="advice"))
+        cont.mount_all(rows)
+
+    def _goals(self, month: str) -> None:
+        cont = self.query_one("#list-goals", Vertical)
+        cont.remove_children()
+        goals = goals_overview()
+        if not goals:
+            cont.mount(Label("Brak celów — dodaj je w zakładce 5.", classes="dim-text"))
+            return
+        goals.sort(key=lambda g: -g["pct"])
+        name_w = calculate_max_width([(None, g["name"]) for g in goals], 1, 8, 16)
+        rows = []
+        for g in goals:
+            name = Label(f"• {g['name']}", classes="row-name")
+            name.styles.width = name_w
+            rows.append(Horizontal(name, Meter(g["pct"], "goal"), classes="card-row"))
+        cont.mount_all(rows)
+
+    def _assets(self, month: str) -> None:
+        cont = self.query_one("#list-assets", Vertical)
+        cont.remove_children()
+        nw = get_net_worth()
+        total = nw["total"] or 1.0
+        rows = []
+        for group in [*KIND_GROUPS, "goals"]:
+            value = nw.get(group, 0.0)
+            if not value:
+                continue
+            name = Label(f"• {'Cele' if group == 'goals' else group}", classes="row-name")
+            name.styles.width = 15
+            rows.append(Horizontal(name, Meter(value / total * 100, "share"),
+                                   Label(money(value, ""), classes="row-amount"), classes="card-row"))
         if not rows:
             rows.append(Label("Brak kont.", classes="dim-text"))
         cont.mount_all(rows)
-
-        piggy_total = get_piggy_total()
-        self.query_one("#val-piggy-total", Label).update(money(piggy_total))
-        self.query_one("#val-net-worth", Label).update(money(total + piggy_total))
-        self.query_one("#card-resources").border_subtitle = f"konta: {money(total)}"
-
-    # ----------------------------------------------------------- STATUS CYKLU
-
-    def refresh_monthly_stats(self) -> None:
-        ym = get_active_month_str()
-        self.query_one("#card-status").border_title = f"STATUS CYKLU {ym}"
-
-        inc, exp = get_monthly_summary(ym)
-        self.query_one("#val-inc", Label).update(Text(money(inc), style=GREEN))
-        self.query_one("#val-exp", Label).update(Text(money(exp), style=RED if exp > 0 else GREEN))
-        flow = inc - exp
-        self.query_one("#val-flow", Label).update(Text(money(flow, signed=True), style=GREEN if flow >= 0 else RED))
-
-        if inc > 0:
-            pct = (exp / inc) * 100
-        else:
-            pct = 100.0 if exp > 0 else 0.0
-        self.query_one("#bar-consumption", ProgressMeter).pct = max(0.0, min(pct, 999.9))
-
-    # ------------------------------------------------------------- NADCHODZĄCE
-
-    def refresh_alerts(self) -> None:
-        cont = self.query_one("#list-alerts", Vertical)
-        cont.remove_children()
-        upcoming = get_upcoming_recurring(limit=20)
-        if not upcoming:
-            cont.mount(Label("Brak aktywnych płatności cyklicznych.", classes="dim-text"))
-            return
-
-        rows = []
-        for item in upcoming:
-            days = int(item["days"])
-            r_type = item.get("type")
-            sign = "+" if r_type == "Dochód" else "-"
-            color = GREEN if r_type == "Dochód" else YELLOW if r_type == "Na Skarbonkę" else RED
-            when = Label(describe_days(days), classes="alert-days")
-            if days < 0:
-                when.add_class("overdue")
-            elif days <= 1:
-                when.add_class("soon")
-            rows.append(Horizontal(
-                Label(f"• {item.get('name') or ''}", classes="alert-name"),
-                Label(Text(f"{sign}{money(float(item.get('amount') or 0.0), '')}", style=color), classes="alert-amount"),
-                when,
-                classes="alert-row",
-            ))
-        cont.mount_all(rows)
-        overdue = sum(1 for i in upcoming if i["days"] < 0)
-        self.query_one("#card-alerts").border_subtitle = f"zaległe: {overdue}" if overdue else ""
-
-    # -------------------------------------------------------------- KATEGORIE
-
-    def refresh_categories(self) -> None:
-        container = self.query_one("#dash-cats-list", Vertical)
-        container.remove_children()
-
-        month = get_active_month_str()
-        spending = get_category_spending_map(month)
-        items = []
-        for row in get_all_categories_data() or []:
-            name = row["name"]
-            limit = float(row["limit_amount"] or 0.0)
-            spent = float(spending.get(name, 0.0))
-            if limit <= 0 and spent <= 0:
-                continue  # nic do pokazania
-            pct = (spent / limit) * 100 if limit > 0 else None
-            items.append((name, pct, spent))
-
-        if not items:
-            container.mount(Label("Brak wydatków i limitów w tym miesiącu.", classes="dim-text"))
-            return
-
-        # najpierw najbardziej „zagrożone” limity, potem kategorie bez limitu wg kwoty
-        items.sort(key=lambda x: (x[1] is None, -(x[1] or 0), -x[2]))
-        name_w = calculate_max_width([(None, n) for n, _, _ in items], key_idx=1, min_w=8, max_w=18)
-        rows = []
-        for name, pct, spent in items:
-            label = Label(f"• {name}", classes="uni-name")
-            label.styles.width = name_w
-            meter = ProgressMeter(pct, is_savings=False, empty_label=f"{money(spent)} (bez limitu)")
-            rows.append(Horizontal(label, meter, classes="uni-row"))
-        container.mount_all(rows)
-
-    # ------------------------------------------------------------------- CELE
-
-    def refresh_piggy_banks(self) -> None:
-        cont = self.query_one("#list-piggy", Vertical)
-        cont.remove_children()
-        pigs = get_all_piggy_banks()
-        if not pigs:
-            cont.mount(Label("Brak celów — dodaj je w zakładce 4.", classes="dim-text"))
-            return
-
-        items = []
-        for p in pigs:
-            target = float(p["target_amount"] or 0.0)
-            current = float(p["current_amount"] or 0.0)
-            items.append((p["name"], (current / target) * 100 if target > 0 else 0.0))
-        items.sort(key=lambda x: -x[1])
-
-        name_w = calculate_max_width([(None, n) for n, _ in items], key_idx=1, min_w=8, max_w=18)
-        rows = []
-        for name, pct in items:
-            label = Label(f"• {name}", classes="uni-name")
-            label.styles.width = name_w
-            rows.append(Horizontal(label, ProgressMeter(pct, is_savings=True), classes="uni-row"))
-        cont.mount_all(rows)
-
-    # ---------------------------------------------------------------- HEATMAPA
-
-    NARROW_AT = 76
-
-    def on_resize(self, event) -> None:
-        # (klasy -narrow/-tiny nadaje WidthClassesMixin – Textual wywołuje handlery z całego MRO)
-        self.call_after_refresh(self._fit_heatmap)
-
-    def _fit_heatmap(self) -> None:
-        """Gdy karta jest za niska na nagłówek dni + wszystkie tygodnie, chowamy nagłówek."""
-        weeks = getattr(self, "_heatmap_weeks", 6)
-        try:
-            card = self.query_one("#card-heatmap")
-            grid = self.query_one("#calendar-grid", Grid)
-        except Exception:
-            return
-        available = card.content_size.height
-        show_header = available <= 0 or available >= weeks + 1
-        grid.set_class(not show_header, "-no-header")
-        rows = (["1"] if show_header else []) + ["1fr"] * weeks
-        grid.styles.grid_rows = " ".join(rows)
-
-    def refresh_heatmap(self) -> None:
-        ym = get_active_month_str()
-        year, month = map(int, ym.split("-"))
-        spending = get_daily_spending_map(ym)
-        weeks = calendar.monthcalendar(year, month)
-        today = date.today()
-        max_amt = max(spending.values(), default=0.0)
-
-        self._heatmap_weeks = len(weeks)
-        self._fit_heatmap()
-
-        idx = 0
-        for week in weeks:
-            for day in week:
-                lbl = self.query_one(f"#day-{idx}", Label)
-                lbl.display = True
-                if day == 0:
-                    lbl.update("")
-                    lbl.set_classes("cal-day empty")
-                    lbl.tooltip = None
-                else:
-                    amt = float(spending.get(day, 0.0))
-                    if amt <= 0 or max_amt <= 0:
-                        level = "neutral"
-                    else:
-                        ratio = amt / max_amt
-                        level = "low" if ratio < 0.34 else "med" if ratio < 0.67 else "high"
-                    classes = f"cal-day {level}"
-                    if (year, month, day) == (today.year, today.month, today.day):
-                        classes += " today"
-                    lbl.set_classes(classes)
-                    lbl.update(str(day))
-                    lbl.tooltip = f"{day:02d}.{month:02d}.{year}: {money(amt)}"
-                idx += 1
-
-        for i in range(idx, CAL_CELLS):
-            lbl = self.query_one(f"#day-{i}", Label)
-            lbl.update("")
-            lbl.display = False
-
-        legend = Text()
-        for level, color in (("mało", "#004d14"), ("średnio", "#008f24"), ("dużo", "#00FF41")):
-            legend.append("■", style=color)
-            legend.append(f" {level} ")
-        if max_amt > 0:
-            legend.append(f"· max {money(max_amt)}")
-        self.query_one("#card-heatmap").border_subtitle = legend.markup
-        self.query_one("#card-heatmap").border_title = f"INTENSYWNOŚĆ WYDATKÓW {datetime(year, month, 1):%m.%Y}"

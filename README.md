@@ -1,95 +1,103 @@
 # Matrix Finance TUI
 
-Matrix Finance TUI to menedżer finansów osobistych oparty na interfejsie terminalowym (Text User Interface), napisany w języku Python. Projekt stawia na szybkość obsługi za pomocą klawiatury, minimalizm interfejsu oraz architekturę local-first, gwarantującą pełną prywatność danych.
+Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego połączonego z oszczędzaniem kopertowym**, działające w terminalu (Python + Textual). Obsługa w całości z klawiatury, architektura local-first — dane zostają na Twoim komputerze i mogą być szyfrowane.
 
-## Główne funkcjonalności
+## Najważniejsze funkcje
 
-* **Interaktywny pulpit (Dashboard):** salda wszystkich kont, środki odłożone w celach i majątek netto, wskaźnik zużycia przychodów w miesiącu, status budżetu kategorii, najbliższe płatności cykliczne (z oznaczeniem zaległych) oraz kalendarz intensywności wydatków (heatmapa skalowana względem najdroższego dnia, podpowiedź z kwotą po najechaniu myszą).
-* **Zarządzanie transakcjami:** wprowadzanie, edycja i kategoryzacja przychodów oraz wydatków w paginowanej tabeli z wyszukiwaniem (bez względu na wielkość liter, także polskich) oraz filtrami kategorii i konta.
-* **Skarbonki i cele:** śledzenie postępów oszczędzania z wpłatami i wypłatami wpływającymi na saldo konta. Usunięcie celu zwraca zgromadzone środki na konto.
-* **Płatności cykliczne:** zlecenia dzienne, tygodniowe, miesięczne i roczne. Silnik księguje **wszystkie** zaległe terminy (np. 3 pominięte miesiące = 3 transakcje), liczy daty od daty startu bez „dryfu” (31. dzień → ostatni dzień krótszego miesiąca), pokazuje najbliższy termin i miesięczny koszt zleceń.
-* **Raportowanie i eksport:** bilans, porównanie z poprzednim miesiącem, średnie dzienne, TOP kategorie i sklepy z udziałem procentowym, największy wydatek/dochód. Eksport do TXT oraz CSV (średnik + UTF‑8 z BOM — poprawnie otwiera się w polskim Excelu) do `Dokumenty/Matrix_Raporty`. Archiwizacja miesiąca.
-* **Konta:** dowolna liczba kont (Ustawienia → „Nowe konto”), korekta salda dowolnego konta.
-* **Bezpieczeństwo i backup:** profile użytkowników (hashowanie PBKDF2‑SHA256). Kopia zapasowa jest spójnym snapshotem bazy (SQLite backup API — działa poprawnie w trybie WAL) zaszyfrowanym AES (Fernet), z możliwością importu.
+### Budżet kopertowy
+* **Koperty** — każda kategoria wydatków ma miesięczny budżet. Pulpit i zakładka *Koperty* pokazują: dostępne, wydane, pozostało i wykorzystanie (pasek).
+* **Koperty elastyczne (↻)** — niewydane środki przechodzą na kolejny miesiąc i zwiększają budżet (np. budżet 500 zł, wydano 420 zł → w kolejnym miesiącu dostępne 580 zł).
+* **Do rozdysponowania** — ile przychodów nie zostało jeszcze przydzielonych do kopert.
 
-## Interfejs dopasowujący się do okna
+### Konta i produkty finansowe
+| Grupa | Rodzaje kont |
+|---|---|
+| Codzienne | konto osobiste, gotówka, fintech / portfel (Revolut, PayPal…) |
+| Oszczędności | konto oszczędnościowe (z oprocentowaniem), **lokata** |
+| Inwestycje | **obligacje skarbowe**, konto maklerskie, **robodoradca** |
+| Emerytalne | **IKE, IKZE, PPK** (z limitem rocznych wpłat) |
 
-Układ automatycznie reaguje na rozmiar terminala (od ok. 60×20 do bardzo szerokich ekranów):
+* **Przelewy między kontami** (`Ctrl+T` z każdego miejsca) — nie są ani wydatkiem, ani dochodem, więc nie zaburzają budżetu.
+* **Lokaty i obligacje** — zakładane z dowolnego konta (np. z Revoluta), z oprocentowaniem, okresem i podatkiem Belki (19%). Postęp okresu i prognoza zysku netto; po terminie odsetki dopisują się automatycznie, a środki wracają na konto źródłowe albo lokata odnawia się z kapitalizacją. Można ją też zerwać (zwrot kapitału bez odsetek).
+* **Inwestycje** — wpłaty/wypłaty, ręczna aktualizacja wyceny (zysk/strata), wpłaty zewnętrzne (np. pracodawca do PPK), dopisywanie odsetek.
+* **Majątek netto** z podziałem na grupy, środki dostępne i ulokowane.
 
-* **Menu boczne** chowa się, gdy okno ma mniej niż 100 kolumn — numery zakładek widać wtedy w nagłówku. `F2` / `Ctrl+B` pokazuje/ukrywa menu ręcznie, a `ESC` otwiera je chwilowo.
-* **Pulpit** przechodzi między układem 1, 2 i 3 kolumn kart; paski postępu i heatmapa skalują się do dostępnego miejsca.
-* **Tabele** same dobierają szerokości kolumn: najpierw zwężają długie teksty (z „…”), a dopiero gdy brakuje miejsca — chowają mniej ważne kolumny. Liczba wierszy na stronie zależy od wysokości okna, a zaznaczony rekord zostaje zachowany przy zmianie rozmiaru.
-* **Stopka** skraca etykiety skrótów (pełne → krótkie → same klawisze), żeby zawsze się mieściła.
-* **Formularze, raporty i okna dialogowe** zmieniają szerokość etykiet, liczbę kolumn i odstępy przy wąskim lub niskim oknie.
+### Oszczędzanie automatyczne
+* **Auto-oszczędzanie procentowe** — X% każdego wpływu na wybrane konto trafia na konto oszczędnościowe lub do celu.
+* **Zaokrąglenia** — każdy wydatek zaokrąglany w górę do pełnych N zł, różnica odkładana (jak w Revolut).
+* **Cele oszczędnościowe** z terminem — aplikacja liczy, ile odkładać miesięcznie, żeby zdążyć.
+* **Zlecenia cykliczne**: wydatki, dochody, wpłaty na cel i przelewy (np. co miesiąc na IKE) — dzienne, tygodniowe, miesięczne, kwartalne, roczne. Zaległe terminy księgowane są wszystkie naraz.
 
-## Technologie
+### Analiza i raporty
+* **Pulpit**: kafelki (majątek, do wydania, bilans, stopa oszczędności z wykresem 6 miesięcy), koperty, kalendarz, nadchodzące płatności, **Doradca** (wskazówki: poduszka finansowa, przekroczone koperty, kończące się lokaty, plan celów), cele i struktura majątku.
+* **Kalendarz** — miesiąc z intensywnością wydatków, kwotami dni, zaplanowanymi zleceniami (•) i końcami lokat (◆); szczegóły wybranego dnia, nowa transakcja w danym dniu.
+* **Raporty** — bilans, porównanie z poprzednim miesiącem, trend 6 miesięcy, TOP koperty i sklepy.
+* **Drukowanie raportu miesięcznego** — raport HTML otwiera się w przeglądarce z oknem drukowania (można też zapisać jako PDF).
 
-* Python 3.10+
-* Textual 7
-* SQLite3
-* Cryptography
+### Dane i bezpieczeństwo
+* **Eksport**: pełny JSON, pełny eksport **zaszyfrowany** hasłem (.mfx), transakcje CSV (Excel), kopia całej bazy (.matrix).
+* **Import**: pełne dane z JSON/.mfx (zastępuje obecne), transakcje z CSV (dopisuje), kopia .matrix jako nowy użytkownik (ekran logowania).
+* **Szyfrowanie danych na dysku** (Ustawienia → Bezpieczeństwo): baza przechowywana tylko jako plik zaszyfrowany (AES/Fernet, klucz z hasła PBKDF2); w trakcie pracy dane są wyłącznie w pamięci RAM i zapisywane co 2 minuty oraz przy wylogowaniu/wyjściu.
+* **Logowanie z kluczem YubiKey (eksperymentalne)** — drugi składnik po haśle (HMAC-SHA1 challenge-response przez `ykman`), z kodem awaryjnym.
+* Hasła: PBKDF2-SHA256.
+
+### Wygląd
+* **Motywy kolorów**: Matrix (zielony), Bursztyn (pomarańczowy), Cyber (cyjan), Fiolet, Karmazyn, Monochromatyczny — zmiana natychmiastowa w Ustawieniach.
+* **Animacja „cyfrowego deszczu”** na ekranie powitalnym i logowania (można wyłączyć).
+* Jeden, czytelny styl pasków postępu w całej aplikacji: `━━━━━━────  62%` (zielony → żółty → czerwony dla budżetu).
+* Interfejs dopasowuje się do okna (od ok. 60×20 do bardzo szerokich ekranów): chowane menu, 1/2/3 kolumny na pulpicie, tabele same dobierają kolumny, stopka skraca etykiety.
 
 ## Instalacja i uruchomienie
 
-1. Sklonuj repozytorium:
-    ```bash
-    git clone https://github.com/ArturKnopek/Matrix-Finance-TUI.git
-    cd Matrix-Finance-TUI
-    ```
+```bash
+git clone https://github.com/ArturKnopek/Matrix-Finance-TUI.git
+cd Matrix-Finance-TUI
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
 
-2. Utwórz i aktywuj środowisko wirtualne (zalecane):
-    ```bash
-    python -m venv venv
+Opcjonalnie (YubiKey): `pip install yubikey-manager` i przygotowanie klucza: `ykman otp chalresp --generate --touch 2`.
 
-    # Windows:
-    venv\Scripts\activate
+Dane: `~/.matrix_finance/` (`auth.db`, `data/<id>.db` lub zaszyfrowane `data/<id>.db.enc`). Logi błędów: `~/.matrix_finance/matrix.log`. Eksporty i raporty: `~/Documents/Matrix_Finance/`.
 
-    # Linux/macOS:
-    source venv/bin/activate
-    ```
-
-3. Zainstaluj zależności:
-    ```bash
-    pip install -r requirements.txt
-    # testy i budowanie .exe:
-    pip install -r requirements-dev.txt
-    ```
-
-4. Uruchom aplikację:
-    ```bash
-    python main.py
-    ```
-
-Dane zapisywane są w `~/.matrix_finance/` (`auth.db`, `data/<id_użytkownika>.db`). Błędy trafiają do `~/.matrix_finance/matrix.log`, a po włączeniu opcji „Diagnostyka” w Ustawieniach — szczegółowe logi do `debug.log`.
-
-## Nawigacja (skróty klawiszowe)
+## Skróty klawiszowe
 
 | Klawisz | Działanie |
 |---|---|
-| `1` – `7` | przełączanie zakładek |
-| `↑` `↓` / `Tab` | poruszanie się po menu i polach formularza |
-| `Enter` | wejście do zakładki · edycja zaznaczonego wiersza · zapis formularza |
-| `ESC` | anuluj formularz · powrót do menu · wyczyść filtry |
-| `F1` | pomoc (lista skrótów) |
-| `F2` / `Ctrl + B` | pokaż/ukryj menu boczne |
-| `PgUp` / `PgDn` | poprzednia/następna strona tabeli (strzałki na krawędzi strony też przełączają) |
-| `Ctrl + N` | nowy element |
-| `Ctrl + E` | edytuj zaznaczony rekord |
-| `Ctrl + D` | usuń zaznaczony rekord |
-| `Ctrl + S` | zapisz formularz |
-| `Ctrl + P` | wstrzymaj/wznów płatność cykliczną |
-| `+` / `-` | wpłata / wypłata (zakładka Skarbonki) |
-| `/` | wyszukiwanie (zakładka Transakcje) |
-| `Ctrl + R` | odśwież i zaksięguj zaległe płatności |
-| `Ctrl + L` | wyloguj |
-| `Ctrl + Q` | wyjście |
+| `1` – `9` | zakładki: Pulpit, Transakcje, Koperty, Konta, Cele, Automaty, Kalendarz, Raporty, Ustawienia |
+| `[` / `]` | poprzedni / następny miesiąc roboczy (z każdego miejsca) |
+| `Ctrl+F` | szukaj wszędzie (transakcje ze wszystkich miesięcy, konta, koperty, cele, zlecenia) |
+| `Ctrl+N` | nowy element w zakładce (na pulpicie: transakcja) |
+| `Ctrl+T` | przelew między kontami |
+| `Ctrl+E` / `Ctrl+D` | edytuj / usuń zaznaczone (w Kontach `Ctrl+D` zamyka konto lub zrywa lokatę) |
+| `+` / `-` | wpłata / wypłata (Konta, Cele); w Kopertach `+` = wydatek z koperty |
+| `W` / `A` / `O` | Konta: wycena lub odsetki / reguła auto-oszczędzania / wpłata zewnętrzna |
+| `Ctrl+P` | pauza / wznowienie zlecenia lub reguły |
+| `Ctrl+R` | odśwież, zaksięguj zaległe zlecenia, rozlicz lokaty |
+| `P` / `G` / `C` | Raporty: drukuj / TXT / CSV |
+| `Enter` | otwórz / edytuj; w formularzu: następne pole (w ostatnim — zapis) |
+| `Ctrl+S` | zapisz formularz |
+| `ESC` | zamknij okno · wróć do menu · wyczyść filtry |
+| `F1` | pomoc · `F2` / `Ctrl+B` pokaż/ukryj menu |
+| `Ctrl+L` / `Ctrl+Q` | wyloguj / wyjście |
 
-Myszą: pierwsze kliknięcie zaznacza wiersz, kliknięcie w zaznaczony wiersz otwiera edycję.
+**Daty** w formularzach: puste = dziś, `wczoraj`, `12`, `12.05`, `12.05.2026`, `2026-05-12`.
+**Kwoty**: `12,50`, `1 200`, działania `12.5+3*2`.
 
-### Wpisywanie dat i kwot
+## Struktura projektu
 
-* **Data:** puste pole = dziś, `wczoraj`, `12` (dzień miesiąca roboczego), `12.05`, `12.05.2026`, `2026-05-12`.
-* **Kwota:** `12,50`, `1 200`, a także proste działania, np. `12.5+3*2` albo `(120+80)/2`.
+```
+src/finance/   silnik: storage (baza, schemat), ledger (transakcje, przelewy), envelopes (koperty),
+               accounts (konta, lokaty, inwestycje), goals (cele), recurring (zlecenia),
+               autosave (auto-oszczędzanie), analytics (doradca, kalendarz, wyszukiwanie),
+               data_io (eksport/import/druk)
+src/core/      auth (hasła), vault (szyfrowanie na dysku), yubikey (2FA)
+src/ui/        theme (motywy), widgets (paski, kalendarz, animacja), smart_table, dialogs, forms
+src/views/     zakładki aplikacji
+src/screens/   powitanie, logowanie, ekran główny, okna systemowe
+```
 
 ## Testy
 
@@ -98,7 +106,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Testy obejmują silnik bazy (salda, płatności cykliczne, archiwum, kopie), parsowanie danych oraz interfejs uruchamiany bez terminala (Textual Pilot) w kilku rozmiarach okna — m.in. sprawdzają, że stopka i kolumny tabel mieszczą się w oknie.
+Testy obejmują silnik (salda, przelewy, lokaty z podatkiem, koperty z przenoszeniem, auto-oszczędzanie, eksport/import), bezpieczeństwo (szyfrowanie, YubiKey z atrapą klucza) oraz interfejs uruchamiany bez terminala w kilku rozmiarach okna.
 
 ## Migracja ze starej bazy `budget.db`
 

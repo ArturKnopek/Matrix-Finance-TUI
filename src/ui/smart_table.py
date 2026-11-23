@@ -30,6 +30,8 @@ from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.widgets import Button, DataTable, Label
 
+from src.ui.theme import palette
+
 CellValue = Union[str, Text, int, float, None]
 RenderFn = Callable[[Mapping[str, Any], int], CellValue]
 
@@ -462,7 +464,7 @@ class SmartTable(Vertical):
             if not page_items:
                 if self.active_columns:
                     empty = [Text("")] * len(self.active_columns)
-                    empty[0] = Text(self.empty_text, style="italic #555555")
+                    empty[0] = Text(self.empty_text, style=f"italic {palette().faint}")
                     table.add_row(*empty, key=EMPTY_ROW_KEY)
                 table.show_cursor = False
             else:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, hmac, hashlib
 from typing import Optional
-from src.database import get_user_by_username, create_user as db_create_user
+from src.finance.storage import create_user as db_create_user, get_user_by_username
 
 class AuthService:
     ALG = "pbkdf2_sha256"
