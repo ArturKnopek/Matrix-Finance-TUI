@@ -1,10 +1,17 @@
 # Instalator Windows: budowa (Linux + NSIS) i test na prawdziwym Windows
 # (cicha instalacja, skróty, wpis w rejestrze, test programu, aktualizacja, deinstalacja).
-# Po wypchnięciu tagu v* (np. v2.1.0) instalator trafia do zakładki Releases.
+# Wydanie (Releases) z instalatorem: wypchnięcie tagu v* (np. v2.1.0) albo ręczne uruchomienie
+# (Actions → Instalator Windows → Run workflow) z zaznaczoną opcją „wydanie” — wtedy tag
+# v<wersja z src/version.py> tworzony jest automatycznie.
 name: Instalator Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      wydanie:
+        description: "Opublikuj wydanie (Releases) z instalatorem — tag v<wersja z src/version.py>"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
     paths:
@@ -131,7 +138,7 @@ jobs:
 
   release:
     name: Wydanie (Releases)
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.wydanie)
     needs: [test-windows, tests-windows]
     runs-on: ubuntu-latest
     permissions:
@@ -139,14 +146,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: installer/windows/RELEASE_NOTES.md
+          sparse-checkout: |
+            installer/windows/RELEASE_NOTES.md
+            src/version.py
           sparse-checkout-cone-mode: false
+      - name: Wersja
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            version=$(python3 -c "import re; print(re.search(r'APP_VERSION = \"(.+?)\"', open('src/version.py').read()).group(1))")
+            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: MatrixFinance-Setup
           path: setup
       - uses: softprops/action-gh-release@v2
         with:
-          name: Matrix Finance ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Matrix Finance ${{ steps.ver.outputs.tag }}
           body_path: installer/windows/RELEASE_NOTES.md
           files: setup/MatrixFinance-Setup-*
