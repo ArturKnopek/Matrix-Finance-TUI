@@ -37,7 +37,7 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 * **Drukowanie raportu miesięcznego** — raport HTML otwiera się w przeglądarce z oknem drukowania (można też zapisać jako PDF).
 
 ### Synchronizacja z telefonem (OneDrive)
-Aplikacja na Androida — osobny projekt **Matrix Finance Mobile**. Synchronizacja odbywa się przez plik w folderze OneDrive (bez własnego serwera):
+Aplikacja na Androida — osobny projekt **[Matrix Finance Mobile](https://github.com/ArturKnopek/Matrix-Finance-Mobile)** (korzysta z tego samego silnika). Synchronizacja odbywa się przez plik w folderze OneDrive (bez własnego serwera):
 
 * komputer zapisuje zaszyfrowaną migawkę danych `MatrixFinance.mfsync` (po zalogowaniu, co 2 minuty, gdy coś się zmieniło, i przy wyjściu; ręcznie `Ctrl+Y`),
 * telefon wczytuje migawkę i odkłada swoje zmiany (wydatki, dochody, przelewy, wpłaty na cele, korekty sald i kopert) w pliku `*.mfops` w tym samym folderze,

@@ -13,4 +13,7 @@ Pobierz **`MatrixFinance-Setup-<wersja>.exe`** (poniżej, w sekcji *Assets*) i u
 
 Wymagania: Windows 10 lub 11, 64-bit. Instalacja cicha: `MatrixFinance-Setup-<wersja>.exe /S`.
 
+**Nowość w 2.2:** synchronizacja z aplikacją na Androida przez OneDrive (Ustawienia → Synchronizacja z telefonem, `Ctrl+Y`).
+Aplikacja na telefon: repozytorium Matrix-Finance-Mobile.
+
 Inne systemy (Linux, macOS) i uruchamianie ze źródeł — zobacz README.
