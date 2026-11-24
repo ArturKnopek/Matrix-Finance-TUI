@@ -53,7 +53,7 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 
 ### Windows — instalator (zalecane)
 
-Pobierz **`MatrixFinance-Setup-<wersja>.exe`** (zakładka *Releases* albo artefakt akcji *Instalator Windows*) i uruchom go:
+Pobierz **`MatrixFinance-Setup-<wersja>.exe`** z [najnowszego wydania (Releases)](https://github.com/ArturKnopek/Matrix-Finance-TUI/releases/latest) i uruchom go:
 
 * instaluje program **razem z własnym Pythonem** — nie trzeba niczego doinstalowywać ani mieć uprawnień administratora,
 * tworzy **skrót na pulpicie** i w menu Start (program, „Sprawdź instalację”, folder z danymi, deinstalator),
@@ -63,7 +63,7 @@ Pobierz **`MatrixFinance-Setup-<wersja>.exe`** (zakładka *Releases* albo artefa
 
 Instalator nie ma płatnego podpisu cyfrowego, więc Windows może pokazać „System Windows ochronił ten komputer” → *Więcej informacji* → *Uruchom mimo to*. Instalacja cicha: `MatrixFinance-Setup-<wersja>.exe /S`.
 
-Budowanie instalatora (Linux lub Windows, potrzebny NSIS 3): `python installer/windows/build_installer.py` → `dist/`. Python dla Windows pobierany jest z oficjalnego pakietu NuGet PSF i weryfikowany sumą SHA-256.
+Budowanie instalatora (Linux lub Windows, potrzebny NSIS 3): `python installer/windows/build_installer.py` → `dist/`. Nowe wydanie z instalatorem: wypchnięcie tagu `vX.Y.Z` (GitHub Actions zbuduje, przetestuje na Windows i opublikuje). Python dla Windows pobierany jest z oficjalnego pakietu NuGet PSF i weryfikowany sumą SHA-256.
 
 ### Ze źródeł (Linux, macOS, Windows)
 
