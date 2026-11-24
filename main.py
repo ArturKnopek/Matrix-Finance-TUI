@@ -113,6 +113,7 @@ def main(argv: list | None = None) -> int:
     try:
         app.run()
     finally:
+        app.sync_on_exit()  # ostatnia migawka dla telefonu (OneDrive), jeśli włączona
         app.close_vault()  # zaszyfrowana baza zawsze zapisana, także po błędzie
     code = app.return_code or 0
     if code:

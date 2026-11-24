@@ -395,6 +395,25 @@ _USER_TABLES_SQL = [
         FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
     )
     """,
+    # synchronizacja telefon ↔ PC (nie są częścią eksportu danych)
+    """
+    CREATE TABLE IF NOT EXISTS sync_applied (
+        op_id      TEXT PRIMARY KEY,
+        device     TEXT,
+        op         TEXT,
+        status     TEXT NOT NULL,
+        message    TEXT,
+        applied_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+        op_id   TEXT PRIMARY KEY,
+        ts      TEXT NOT NULL,
+        op      TEXT NOT NULL,
+        data    TEXT NOT NULL
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS autosave_rules (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -599,7 +618,7 @@ def sync_active_month() -> None:
 def reset_user_db_hard() -> None:
     with open_user_db(write=True) as conn:
         for table in ("transactions", "accounts", "categories", "piggy_banks", "recurring_payments", "archive",
-                      "autosave_rules", "envelope_adjustments", "settings"):
+                      "autosave_rules", "envelope_adjustments", "sync_applied", "sync_outbox", "settings"):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
     init_user_db(get_active_user_db(), 0.0, 0.0)
 

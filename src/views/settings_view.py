@@ -60,6 +60,11 @@ class SettingsView(ViewMixin, VerticalScroll):
         yield form_row("Klucz YubiKey:", Label("", id="set-yk-status", classes="row-value"))
         yield form_row("", Button("", id="btn-yubikey", classes="btn-inline"))
 
+        yield Label("SYNCHRONIZACJA Z TELEFONEM (OneDrive)", classes="section-title")
+        yield form_row("Stan:", Label("", id="set-sync-status", classes="row-value"))
+        yield form_row("", Button("USTAW SYNCHRONIZACJĘ", id="btn-sync-setup", classes="btn-inline"))
+        yield form_row("", Button("SYNCHRONIZUJ TERAZ (Ctrl+Y)", id="btn-sync-now", classes="btn-inline"))
+
         yield Label("DANE", classes="section-title")
         yield form_row("Eksport:", Button("EKSPORTUJ DANE (JSON / MFX / CSV / .matrix)", id="btn-export",
                                           classes="btn-inline"))
@@ -89,6 +94,7 @@ class SettingsView(ViewMixin, VerticalScroll):
             self.query_one("#chk-animations", Checkbox).value = get_setting("ui_animations", "1") == "1"
             self.query_one("#set-theme", Select).value = get_setting("ui_theme", "matrix")
         self._refresh_security()
+        self._refresh_sync()
         rows = get_all_users()
         self._users = {r["id"]: r["username"] for r in rows}
         sel = self.query_one("#sel-user-delete", Select)
@@ -110,6 +116,26 @@ class SettingsView(ViewMixin, VerticalScroll):
             Text("WYMAGANY przy logowaniu (eksperymentalne)", style=f"bold {p.positive}") if yk
             else Text("nieaktywny (eksperymentalne)", style=p.muted))
         self.query_one("#btn-yubikey", Button).label = "WYŁĄCZ KLUCZ YUBIKEY" if yk else "ZAREJESTRUJ KLUCZ YUBIKEY"
+
+    def _refresh_sync(self) -> None:
+        from src.finance import sync
+
+        p = palette()
+        label = self.query_one("#set-sync-status", Label)
+        if not sync.is_configured():
+            label.update(Text("wyłączona — ustaw folder OneDrive i hasło", style=p.muted))
+            return
+        last = sync.get_sync_setting(sync.SET_LAST)
+        info = sync.get_sync_setting(sync.SET_LAST_INFO)
+        auto = "automatyczna" if sync.auto_enabled() else "ręczna (Ctrl+Y)"
+        text = Text()
+        text.append(f"WŁĄCZONA ({auto})", style=f"bold {p.positive}")
+        text.append(f" · ostatnio {sync.format_stamp(last)}" if last else " · jeszcze nie synchronizowano",
+                    style=p.muted)
+        if info:
+            text.append(f" · {info}", style=p.muted)
+        text.append(f"\n{sync.get_sync_setting(sync.SET_FOLDER)}", style=p.muted)
+        label.update(text)
 
     # ---------------------------------------------------------------- zdarzenia
 
@@ -148,6 +174,8 @@ class SettingsView(ViewMixin, VerticalScroll):
             "btn-export": self._export,
             "btn-import": self._import,
             "btn-print": self._print,
+            "btn-sync-setup": self._sync_setup,
+            "btn-sync-now": self._sync_now,
             "btn-delete-user": self._delete_user,
             "btn-reset-db": self._reset,
         }.get(event.button.id or "")
@@ -164,6 +192,15 @@ class SettingsView(ViewMixin, VerticalScroll):
             return
         set_active_month_str(f"{y}-{m}")
         self.post_message(DataChanged(f"Miesiąc roboczy: {y}-{m}"))
+
+    def _sync_setup(self) -> None:
+        from src.screens.modals import SyncSettingsDialog
+
+        self.open_dialog(SyncSettingsDialog(), after=lambda _: self._refresh_sync())
+
+    def _sync_now(self) -> None:
+        self.screen.action_sync_now()  # type: ignore[attr-defined]
+        self._refresh_sync()
 
     def _password(self) -> None:
         from src.screens.modals import ChangePasswordDialog

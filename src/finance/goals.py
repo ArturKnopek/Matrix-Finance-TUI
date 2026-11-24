@@ -60,7 +60,7 @@ def update_piggy_bank(p_id: int, name: str, target: float, account_type: str,
 
 
 def move_goal_funds(conn: sqlite3.Connection, p_id: int, amount_change: float, account: str, day: str,
-                    note: str = "", check_funds: bool = True) -> None:
+                    note: str = "", check_funds: bool = True, tx_uid: Optional[str] = None) -> None:
     """
     amount_change > 0: konto -> cel, < 0: cel -> konto. Wykonywane w przekazanej transakcji SQL.
     """
@@ -80,10 +80,10 @@ def move_goal_funds(conn: sqlite3.Connection, p_id: int, amount_change: float, a
     conn.execute("UPDATE piggy_banks SET current_amount = current_amount + ? WHERE id = ?", (amount_change, p_id))
     if amount_change > 0:
         post_entry(conn, day, TRANSFER, None, account, piggy["name"], amount_change,
-                   note or f"Wpłata na cel: {piggy['name']}", subtype="goal_out", goal_id=p_id)
+                   note or f"Wpłata na cel: {piggy['name']}", subtype="goal_out", goal_id=p_id, tx_uid=tx_uid)
     else:
         post_entry(conn, day, TRANSFER, None, account, piggy["name"], abs(amount_change),
-                   note or f"Wypłata z celu: {piggy['name']}", subtype="goal_in", goal_id=p_id)
+                   note or f"Wypłata z celu: {piggy['name']}", subtype="goal_in", goal_id=p_id, tx_uid=tx_uid)
 
 
 def update_piggy_bank_balance(p_id: int, amount_change: float, selected_account: str,

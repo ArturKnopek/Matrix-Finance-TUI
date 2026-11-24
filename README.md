@@ -36,6 +36,17 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 * **Raporty** — bilans, porównanie z poprzednim miesiącem, trend 6 miesięcy, TOP koperty i sklepy.
 * **Drukowanie raportu miesięcznego** — raport HTML otwiera się w przeglądarce z oknem drukowania (można też zapisać jako PDF).
 
+### Synchronizacja z telefonem (OneDrive)
+Aplikacja na Androida — osobny projekt **Matrix Finance Mobile**. Synchronizacja odbywa się przez plik w folderze OneDrive (bez własnego serwera):
+
+* komputer zapisuje zaszyfrowaną migawkę danych `MatrixFinance.mfsync` (po zalogowaniu, co 2 minuty, gdy coś się zmieniło, i przy wyjściu; ręcznie `Ctrl+Y`),
+* telefon wczytuje migawkę i odkłada swoje zmiany (wydatki, dochody, przelewy, wpłaty na cele, korekty sald i kopert) w pliku `*.mfops` w tym samym folderze,
+* komputer dopisuje zmiany z telefonu — każdą tylko raz, nawet jeśli plik zapisano kilka razy — i zapisuje nową migawkę; telefon po jej wczytaniu ma znowu komplet danych,
+* zmiana, której nie da się wykonać (np. cel usunięty na komputerze), jest odrzucana i telefon o tym informuje,
+* oba pliki są szyfrowane hasłem synchronizacji (AES/Fernet, PBKDF2).
+
+Konfiguracja: *Ustawienia (9) → Synchronizacja z telefonem → Ustaw synchronizację* (folder OneDrive wykrywany automatycznie, hasło).
+
 ### Dane i bezpieczeństwo
 * **Eksport**: pełny JSON, pełny eksport **zaszyfrowany** hasłem (.mfx), transakcje CSV (Excel), kopia całej bazy (.matrix).
 * **Import**: pełne dane z JSON/.mfx (zastępuje obecne), transakcje z CSV (dopisuje), kopia .matrix jako nowy użytkownik (ekran logowania).
@@ -98,6 +109,7 @@ Dane: `~/.matrix_finance/` — zmienna `MATRIX_FINANCE_HOME` zmienia lokalizacj�
 | `M` | Koperty: przesuń środki do innej koperty |
 | `Ctrl+P` | pauza / wznowienie zlecenia lub reguły |
 | `Ctrl+R` | odśwież, zaksięguj zaległe zlecenia, rozlicz lokaty |
+| `Ctrl+Y` | synchronizuj z telefonem (OneDrive) |
 | `P` / `G` / `C` | Raporty: drukuj / TXT / CSV |
 | `Enter` | otwórz / edytuj; w formularzu: następne pole (w ostatnim — zapis) |
 | `Ctrl+S` | zapisz formularz |
@@ -114,7 +126,7 @@ Dane: `~/.matrix_finance/` — zmienna `MATRIX_FINANCE_HOME` zmienia lokalizacj�
 src/finance/   silnik: storage (baza, schemat), ledger (transakcje, przelewy), envelopes (koperty),
                accounts (konta, lokaty, inwestycje), goals (cele), recurring (zlecenia),
                autosave (auto-oszczędzanie), analytics (doradca, kalendarz, wyszukiwanie),
-               data_io (eksport/import/druk)
+               data_io (eksport/import/druk), sync (synchronizacja z telefonem przez OneDrive)
 src/core/      auth (hasła), vault (szyfrowanie na dysku), yubikey (2FA)
 src/ui/        theme (motywy), widgets (paski, kalendarz, animacja), smart_table, dialogs, forms
 src/views/     zakładki aplikacji

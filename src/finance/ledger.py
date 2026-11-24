@@ -121,8 +121,10 @@ def insert_entry(
     subtype: str = "regular",
     group_id: Optional[str] = None,
     goal_id: Optional[int] = None,
+    tx_uid: Optional[str] = None,
 ) -> int:
-    """Wstawia wiersz transakcji (bez zmiany salda) i nadaje kod TX000001."""
+    """Wstawia wiersz transakcji (bez zmiany salda) i nadaje kod TX000001.
+    tx_uid — stały identyfikator (synchronizacja telefon ↔ PC); domyślnie losowy."""
     cur = conn.execute(
         """
         INSERT INTO transactions
@@ -131,7 +133,7 @@ def insert_entry(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (date, t_type, category, account, shop, abs(float(amount)), desc, int(is_reg),
-         subtype, group_id, goal_id, uuid.uuid4().hex),
+         subtype, group_id, goal_id, tx_uid or uuid.uuid4().hex),
     )
     new_id = int(cur.lastrowid)
     conn.execute("UPDATE transactions SET human_code = ? WHERE id = ?", (make_code("TX", new_id), new_id))
@@ -145,9 +147,10 @@ def _insert_transaction_row(conn, date, t_type, category, account, shop, amount,
 
 def post_entry(conn: sqlite3.Connection, date: str, t_type: str, category: Optional[str], account: str,
                shop: str, amount: float, desc: str, subtype: str = "regular",
-               group_id: Optional[str] = None, goal_id: Optional[int] = None) -> int:
+               group_id: Optional[str] = None, goal_id: Optional[int] = None, tx_uid: Optional[str] = None) -> int:
     """Wpis + zmiana salda w jednym kroku (w ramach przekazanej transakcji SQL)."""
-    t_id = insert_entry(conn, date, t_type, category, account, shop, amount, desc, 1, subtype, group_id, goal_id)
+    t_id = insert_entry(conn, date, t_type, category, account, shop, amount, desc, 1, subtype, group_id, goal_id,
+                        tx_uid)
     change_balance(conn, account, balance_delta(t_type, amount, subtype))
     return t_id
 
@@ -161,7 +164,7 @@ def new_group_id(prefix: str = "grp") -> str:
 # =============================================================================
 
 def add_transaction(date: str, t_type: str, category: str, account: str, shop: str, amount: float, desc: str,
-                    is_reg: bool, apply_autosave: bool = True) -> int:
+                    is_reg: bool, apply_autosave: bool = True, tx_uid: Optional[str] = None) -> int:
     """
     Dodaje wydatek lub dochód.
     is_reg=True  -> wpis w historii + zmiana salda (+ reguły auto-oszczędzania),
@@ -176,12 +179,18 @@ def add_transaction(date: str, t_type: str, category: str, account: str, shop: s
         if not is_reg:
             change_balance(conn, account, balance_delta(t_type, amount))
             return 0
-        t_id = post_entry(conn, date, t_type, normalize_category(conn, category), account, shop, amount, desc)
+        t_id = post_entry(conn, date, t_type, normalize_category(conn, category), account, shop, amount, desc,
+                          tx_uid=tx_uid)
         if apply_autosave:
             from src.finance.autosave import apply_autosave_rules
 
             apply_autosave_rules(conn, account, t_type, amount, date, shop or desc)
         return t_id
+
+
+def get_transaction_by_uid(tx_uid: str):
+    with open_user_db() as conn:
+        return conn.execute("SELECT * FROM transactions WHERE tx_uid = ?", (tx_uid,)).fetchone()
 
 
 def get_transaction_by_id(t_id: int):

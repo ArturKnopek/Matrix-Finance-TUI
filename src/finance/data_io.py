@@ -94,13 +94,23 @@ def export_encrypted_backup(out_file: str, password: str) -> bool:
 # JSON / MFX
 # =============================================================================
 
+LOCAL_SETTING_PREFIXES = ("sync_",)  # ustawienia tego urządzenia (np. hasło synchronizacji) — nie wędrują z danymi
+
+
+def _is_local_setting(row: Dict[str, Any]) -> bool:
+    return str(row.get("key") or "").startswith(LOCAL_SETTING_PREFIXES)
+
+
 def export_data_dict() -> Dict[str, Any]:
     tables: Dict[str, List[Dict[str, Any]]] = {}
     with open_user_db() as conn:
         existing = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for table in list_user_tables():
             if table in existing:
-                tables[table] = [dict(r) for r in conn.execute(f"SELECT * FROM {table}").fetchall()]
+                rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table}").fetchall()]
+                if table == "settings":
+                    rows = [r for r in rows if not _is_local_setting(r)]
+                tables[table] = rows
     return {"format": EXPORT_FORMAT, "version": EXPORT_VERSION, "exported_at": datetime.now().isoformat(),
             "tables": tables}
 
@@ -134,14 +144,22 @@ def import_json(path: str, password: Optional[str] = None) -> Dict[str, int]:
     Zastępuje WSZYSTKIE dane bieżącego użytkownika danymi z eksportu.
     Kolumny nieznane w bieżącym schemacie są pomijane. Zwraca liczbę wierszy per tabela.
     """
-    data = read_export_file(path, password)
+    return import_data_dict(read_export_file(path, password))
+
+
+def import_data_dict(data: Dict[str, Any]) -> Dict[str, int]:
+    """Zastępuje dane bieżącego użytkownika zawartością eksportu (słownik). Ustawienia lokalne (sync_*) zostają."""
     counts: Dict[str, int] = {}
     with open_user_db(write=True) as conn:
         conn.execute("PRAGMA defer_foreign_keys = ON")
+        local_settings = [dict(r) for r in conn.execute("SELECT key, value FROM settings").fetchall()
+                          if _is_local_setting(dict(r))]
         for table in reversed(list_user_tables()):
             conn.execute(f"DELETE FROM {table}")
         for table in list_user_tables():
             rows = data["tables"].get(table) or []
+            if table == "settings":
+                rows = [r for r in rows if not _is_local_setting(r)] + local_settings
             columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             for row in rows:
                 cols = [c for c in row if c in columns]

@@ -129,7 +129,7 @@ def update_account_balance(account_name: str, amount_change: float) -> None:
 
 
 def set_account_balance(account_name: str, new_balance: float, note: str = "Korekta salda",
-                        day: Optional[str] = None) -> float:
+                        day: Optional[str] = None, tx_uid: Optional[str] = None) -> float:
     """
     Korekta salda: ustawia rzeczywiste saldo konta, zapisując różnicę jako wpis
     „Korekta salda (+/−)” (Transfer — nie jest wydatkiem ani dochodem, nie zmienia budżetu).
@@ -141,7 +141,7 @@ def set_account_balance(account_name: str, new_balance: float, note: str = "Kore
         if diff:
             post_entry(conn, day or date.today().isoformat(), TRANSFER, None, account_name,
                        note or "Korekta salda", abs(diff), "[KOREKTA] ręczna zmiana salda",
-                       subtype="correction_up" if diff > 0 else "correction_down")
+                       subtype="correction_up" if diff > 0 else "correction_down", tx_uid=tx_uid)
         return diff
 
 
@@ -258,7 +258,7 @@ def close_account(name: str, transfer_to: Optional[str] = None) -> Tuple[bool, s
 # =============================================================================
 
 def _transfer(conn: sqlite3.Connection, source: str, target: str, amount: float, day: str, note: str,
-              check_funds: bool = True, group_prefix: str = "trf") -> str:
+              check_funds: bool = True, group_prefix: str = "trf", group_id: Optional[str] = None) -> str:
     source = require_account(conn, source)
     target = require_account(conn, target)
     amount = round(abs(float(amount)), 2)
@@ -268,17 +268,22 @@ def _transfer(conn: sqlite3.Connection, source: str, target: str, amount: float,
         raise ValueError("Kwota przelewu musi być większa od zera.")
     if check_funds and account_balance_in(conn, source) + 1e-9 < amount:
         raise ValueError(f"Brak środków na koncie {source}.")
-    group = new_group_id(group_prefix)
+    group = group_id or new_group_id(group_prefix)
     desc = note or f"Przelew {source} → {target}"
-    post_entry(conn, day, TRANSFER, None, source, f"→ {target}", amount, desc, subtype="transfer_out", group_id=group)
-    post_entry(conn, day, TRANSFER, None, target, f"← {source}", amount, desc, subtype="transfer_in", group_id=group)
+    # stały group_id (np. z telefonu) => stałe identyfikatory obu „nóg” przelewu
+    uid_out, uid_in = (f"{group}:out", f"{group}:in") if group_id else (None, None)
+    post_entry(conn, day, TRANSFER, None, source, f"→ {target}", amount, desc, subtype="transfer_out", group_id=group,
+               tx_uid=uid_out)
+    post_entry(conn, day, TRANSFER, None, target, f"← {source}", amount, desc, subtype="transfer_in", group_id=group,
+               tx_uid=uid_in)
     return group
 
 
 def transfer_between_accounts(source: str, target: str, amount: float, day: Optional[str] = None,
-                              note: str = "", check_funds: bool = True) -> str:
+                              note: str = "", check_funds: bool = True, group_id: Optional[str] = None) -> str:
     with open_user_db(write=True) as conn:
-        return _transfer(conn, source, target, amount, day or date.today().isoformat(), note, check_funds)
+        return _transfer(conn, source, target, amount, day or date.today().isoformat(), note, check_funds,
+                         group_id=group_id)
 
 
 def external_contribution(account: str, amount: float, day: Optional[str] = None, note: str = "") -> int:

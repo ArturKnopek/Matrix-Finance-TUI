@@ -92,7 +92,20 @@ class MatrixApp(App):
                 logging.error("Błąd zapisu zaszyfrowanej bazy: %s", e)
             self.vault = None
 
+    def sync_on_exit(self) -> None:
+        """Ostatnia synchronizacja z telefonem (OneDrive) przed wylogowaniem / wyjściem."""
+        if not self.current_user_id:
+            return
+        try:
+            from src.finance import sync
+
+            if sync.auto_enabled():
+                sync.sync_folder_now(only_if_changed=True)
+        except Exception as e:
+            logging.warning("Synchronizacja przy zamykaniu nie powiodła się: %s", e)
+
     def clear_session(self) -> None:
+        self.sync_on_exit()
         self.close_vault()
         self.current_user_id = None
         self.current_username = None

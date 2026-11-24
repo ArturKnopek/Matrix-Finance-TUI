@@ -320,6 +320,41 @@ def test_corrections_from_views(user_db):
     assert sum(e["adjustment"] for e in envelopes.get_envelope_overview(month)) == pytest.approx(40.0)
 
 
+def test_sync_settings_dialog_and_ctrl_y(user_db, tmp_path):
+    db = user_db
+    folder = tmp_path / "OneDrive" / "MatrixFinance"
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_dashboard(app, pilot, db)
+            await pilot.press("ctrl+y")  # brak konfiguracji -> okno ustawień
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "SyncSettingsDialog"
+            dlg = app.screen
+            dlg.query_one("#f-folder").value = str(folder)
+            dlg.query_one("#f-pass").value = "tajne123"
+            dlg.query_one("#f-pass2").value = "inne"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "SyncSettingsDialog"  # hasła się różnią
+            dlg.query_one("#f-pass2").value = "tajne123"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.5)
+            assert _dialog_name(app) == "MainDashboard"
+            assert (folder / "MatrixFinance.mfsync").exists()
+            first = (folder / "MatrixFinance.mfsync").stat().st_mtime_ns
+            ledger.add_transaction(date.today().isoformat(), "Wydatek", "Jedzenie", "Karta", "Sklep", 5, "", True)
+            await pilot.press("ctrl+y")  # skonfigurowane -> synchronizacja
+            await pilot.pause(0.5)
+            assert (folder / "MatrixFinance.mfsync").stat().st_mtime_ns != first
+            await pilot.press("9")
+            await pilot.pause(0.3)
+            assert "WŁĄCZONA" in str(app.screen.query_one("#set-sync-status").render())
+
+    run(scenario())
+
+
 def test_welcome_timer_after_leaving_screen(user_db):
     """Regresja (Windows): timer mrugania przycisku działał po zamknięciu ekranu powitalnego."""
     db = user_db

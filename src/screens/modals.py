@@ -68,6 +68,7 @@ HELP_SECTIONS = [
         ("W / A / O", "Konta: wycena lub odsetki / auto-oszczędzanie / wpłata zewnętrzna"),
         ("Ctrl+P", "pauza zlecenia / reguły"),
         ("Ctrl+R", "odśwież, zaksięguj zlecenia i rozlicz lokaty"),
+        ("Ctrl+Y", "synchronizuj z telefonem (OneDrive)"),
     ]),
     ("FORMULARZE", [
         ("Enter", "następne pole (w ostatnim — zapis)"),
@@ -285,6 +286,69 @@ class EncryptionDialog(FormDialog):
         vault.disable()
         self.app.vault = None
         return {"message": "Szyfrowanie wyłączone."}
+
+
+# =============================================================================
+# Synchronizacja z telefonem (OneDrive)
+# =============================================================================
+
+class SyncSettingsDialog(FormDialog):
+    """Konfiguracja synchronizacji przez plik w folderze OneDrive."""
+
+    WIDE = True
+    SAVE_LABEL = "ZAPISZ I SYNCHRONIZUJ"
+
+    def __init__(self) -> None:
+        super().__init__("SYNCHRONIZACJA Z TELEFONEM (OneDrive)")
+
+    def compose_body(self) -> Iterable[Widget]:
+        from src.finance import sync
+
+        folder = sync.get_sync_setting(sync.SET_FOLDER) or str(sync.default_sync_folder())
+        has_password = sync.is_configured()
+        yield Label("Komputer zapisuje zaszyfrowany plik MatrixFinance.mfsync w folderze OneDrive, a telefon "
+                    "odkłada tam swoje zmiany (pliki .mfops). Przy każdej synchronizacji komputer dopisuje zmiany "
+                    "z telefonu (każdą tylko raz) i zapisuje nową wersję danych.", classes="dialog-note")
+        yield form_row("Folder:", Input(folder, id="f-folder", classes="row-input"))
+        detected = sync.onedrive_detected()
+        yield form_row("", Label(("✓ wykryto OneDrive" if detected else "⚠ nie wykryto OneDrive — wpisz folder"),
+                                 classes="row-value"))
+        yield form_row("Hasło:", password_input("f-pass", "bez zmian" if has_password
+                                                else "min. 6 znaków — to samo wpiszesz w telefonie"))
+        yield form_row("Powtórz:", password_input("f-pass2", "powtórz hasło"))
+        yield form_row("", Checkbox("Automatycznie (start, co 2 min, wyjście)",
+                                    id="f-auto", value=sync.get_sync_setting(sync.SET_AUTO, "1") == "1"),
+                       classes="checkbox-row")
+        yield Label("Telefon: Matrix Finance → Synchronizacja → „Pobierz z OneDrive” → wybierz MatrixFinance.mfsync "
+                    "z tego folderu i wpisz to samo hasło. Zmiany z telefonu: „Wyślij do OneDrive” (zapisz plik "
+                    "w tym samym folderze).", classes="dialog-note")
+
+    def submit_form(self) -> Any:
+        from src.finance import sync
+
+        folder = Path(self.value("f-folder") or "").expanduser()
+        if not str(folder).strip() or str(folder) == ".":
+            raise FormError("Podaj folder (np. w OneDrive).", "f-folder")
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise FormError(f"Nie można utworzyć folderu: {e}", "f-folder")
+        password = self.query_one("#f-pass", Input).value
+        repeat = self.query_one("#f-pass2", Input).value
+        if password or not sync.is_configured():
+            if len(password) < 6:
+                raise FormError("Hasło synchronizacji: co najmniej 6 znaków.", "f-pass")
+            if password != repeat:
+                raise FormError("Hasła się różnią.", "f-pass2")
+            sync.set_sync_setting(sync.SET_PASSWORD, password)
+            sync.set_sync_setting(sync.SET_DATA_HASH, "")  # nowe hasło => nowa migawka
+        sync.set_sync_setting(sync.SET_FOLDER, str(folder))
+        sync.set_sync_setting(sync.SET_AUTO, "1" if self.value("f-auto") else "0")
+        try:
+            result = sync.sync_folder_now(folder)
+        except Exception as e:
+            raise FormError(f"Zapisano ustawienia, ale synchronizacja nie powiodła się: {e}")
+        return {"message": f"Synchronizacja: {result.summary()}\n{folder}"}
 
 
 # =============================================================================

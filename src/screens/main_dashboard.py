@@ -105,6 +105,7 @@ class MainDashboard(Screen):
         Binding("f2", "toggle_sidebar", "Menu", show=False),
         Binding("ctrl+b", "toggle_sidebar", "Menu", show=False),
         Binding("ctrl+r", "refresh_all", "Odśwież", show=False),
+        Binding("ctrl+y", "sync_now", "Synchronizuj", show=False),
         Binding("ctrl+l", "logout", "Wyloguj", show=False),
         Binding("ctrl+q", "exit_app", "Wyjście", show=False),
     ]
@@ -156,7 +157,8 @@ class MainDashboard(Screen):
         sync_active_month()
         self._session_user = getattr(self.app, "current_user_id", None)
         self.set_interval(1, self.update_clock)
-        self.set_interval(SEAL_INTERVAL_S, self._seal_vault)
+        self.set_interval(SEAL_INTERVAL_S, self._periodic_save)
+        self._sync_error_shown = False
         self._switch_to("view-dashboard")
         self.call_after_refresh(self._apply_responsive)
         self.call_after_refresh(self._focus_active_menu_button)
@@ -495,6 +497,54 @@ class MainDashboard(Screen):
             return False
         return True
 
+    def _periodic_save(self) -> None:
+        self._auto_sync()
+        self._seal_vault()
+
+    def _auto_sync(self) -> None:
+        """Synchronizacja z telefonem (OneDrive) w tle: przy starcie, co 2 minuty i przy wyjściu."""
+        from src.finance import sync
+
+        try:
+            if not sync.auto_enabled():
+                return
+            result = sync.sync_folder_now(only_if_changed=True)
+        except Exception as e:
+            if not getattr(self, "_sync_error_shown", False):
+                self._sync_error_shown = True
+                self.notify(f"Synchronizacja z telefonem: {e}", severity="warning", timeout=8)
+            logging.warning("Automatyczna synchronizacja: %s", e)
+            return
+        self._sync_error_shown = False
+        self._after_sync(result, quiet=True)
+
+    def _after_sync(self, result: Any, quiet: bool = False) -> None:
+        if result.applied or result.rejected:
+            self.refresh_all_views()
+        if result.rejected:
+            self.notify("Odrzucone operacje z telefonu:\n" + "\n".join(result.rejected[:5]), severity="warning",
+                        timeout=12)
+        if result.applied:
+            self.notify(f"Z telefonu: {len(result.applied)} operacji\n" + "\n".join(result.applied[:5]),
+                        timeout=8)
+        elif not quiet:
+            self.notify(f"Synchronizacja: {result.summary()}\n{result.folder}", timeout=6)
+
+    def action_sync_now(self) -> None:
+        from src.finance import sync
+
+        if not sync.is_configured():
+            from src.screens.modals import SyncSettingsDialog
+
+            self._active_view().open_dialog(SyncSettingsDialog())
+            return
+        try:
+            result = sync.sync_folder_now()
+        except Exception as e:
+            self.notify(f"Synchronizacja nie powiodła się: {e}", severity="error", timeout=10)
+            return
+        self._after_sync(result)
+
     def _seal_vault(self) -> None:
         vault = getattr(self.app, "vault", None)
         if vault is not None:
@@ -504,6 +554,7 @@ class MainDashboard(Screen):
                 logging.error("Nie udało się zapisać zaszyfrowanej bazy: %s", e)
 
     def _startup_checks(self) -> None:
+        self._auto_sync()  # najpierw operacje z telefonu
         settled = settle_matured_deposits()
         if settled:
             self.notify("Rozliczono lokaty: " + " ".join(settled), timeout=8)
