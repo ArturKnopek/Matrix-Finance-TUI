@@ -245,7 +245,7 @@ def describe_op(op: Dict[str, Any]) -> str:
     label = OPERATIONS.get(op.get("op", ""), (op.get("op", "?"), None))[0]
     details = []
     if "amount" in d:
-        details.append(f"{float(d['amount']):.2f} zł")
+        details.append(f"{float(d['amount']):.2f} zł".replace(".", ","))
     for key in ("shop", "category", "account", "source", "target", "goal_name"):
         if d.get(key):
             details.append(str(d[key]))
