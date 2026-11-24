@@ -94,7 +94,7 @@ def export_encrypted_backup(out_file: str, password: str) -> bool:
 # JSON / MFX
 # =============================================================================
 
-LOCAL_SETTING_PREFIXES = ("sync_",)  # ustawienia tego urządzenia (np. hasło synchronizacji) — nie wędrują z danymi
+LOCAL_SETTING_PREFIXES = ("sync_", "local_")  # ustawienia tego urządzenia (hasło synchronizacji, motyw telefonu…) — nie wędrują z danymi
 
 
 def _is_local_setting(row: Dict[str, Any]) -> bool:
