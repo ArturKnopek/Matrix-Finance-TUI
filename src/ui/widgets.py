@@ -411,7 +411,12 @@ class MatrixRain(Widget):
                 self._glyphs[col] = [self._rng.choice(RAIN_CHARS) for _ in range(height)]
 
     def _tick(self) -> None:
-        if not self.display or self.app.screen is not self.screen:
+        if not self.is_attached or not self.display:
+            return
+        try:
+            if self.app.screen is not self.screen:
+                return
+        except Exception:  # widżet odłączany razem z ekranem
             return
         self._advance()
         self.frames += 1

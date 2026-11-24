@@ -320,6 +320,26 @@ def test_corrections_from_views(user_db):
     assert sum(e["adjustment"] for e in envelopes.get_envelope_overview(month)) == pytest.approx(40.0)
 
 
+def test_welcome_timer_after_leaving_screen(user_db):
+    """Regresja (Windows): timer mrugania przycisku działał po zamknięciu ekranu powitalnego."""
+    db = user_db
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            welcome = app.screen
+            assert welcome.__class__.__name__ == "WelcomeScreen"
+            # jak przy zamykaniu aplikacji: elementy ekranu już usunięte, timer jeszcze działa
+            await welcome.query_one("#start-btn").remove()
+            welcome._toggle_blink()  # nie może rzucić NoMatches
+            await _open_dashboard(app, pilot, db)
+            welcome._toggle_blink()
+            await pilot.pause(0.8)
+
+    run(scenario())
+
+
 def test_new_recurring_in_the_past_offers_catch_up(user_db):
     db = user_db
     start = (date.today() - timedelta(days=14)).isoformat()

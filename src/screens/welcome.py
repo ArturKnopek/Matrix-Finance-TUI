@@ -72,8 +72,12 @@ class WelcomeScreen(Screen):
             self._show_wizard(False)
 
     def _toggle_blink(self) -> None:
+        # timer może zadziałać tuż po zamknięciu ekranu (przejście do logowania) — wtedy przycisku już nie ma
+        if not self.is_attached or self.app.screen is not self:
+            return
         self._blink = not self._blink
-        self.query_one("#start-btn", Button).set_class(self._blink, "blink")
+        for button in self.query("#start-btn").results(Button):
+            button.set_class(self._blink, "blink")
 
     def _wizard_visible(self) -> bool:
         return not self.query_one("#wizard-window").has_class("hidden")
