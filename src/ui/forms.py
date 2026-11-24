@@ -340,6 +340,7 @@ ACCOUNT_OPERATIONS = {
     "valuation": "AKTUALIZACJA WYCENY",
     "external": "WPŁATA ZEWNĘTRZNA",
     "interest": "DOPISZ ODSETKI / ZYSK",
+    "correction": "KOREKTA SALDA",
     "close": "ZAMKNIJ KONTO",
 }
 
@@ -363,6 +364,10 @@ class AccountOperationDialog(FormDialog):
                                          allow_blank=not others, classes="row-select"))
         if op == "valuation":
             yield form_row("Nowa wartość:", amount_input("f-amount", "aktualna wycena portfela"))
+        elif op == "correction":
+            yield form_row("Rzeczywiste saldo:", amount_input("f-amount", "np. stan z aplikacji banku",
+                                                              f"{float(a['balance'] or 0):.2f}"))
+            yield form_row("Różnica:", info_line("f-diff", "—"))
         elif op == "close":
             others = [(lbl, v) for lbl, v in acc_api.get_account_options(with_balance=True) if v != a["name"]]
             yield form_row("Przelej resztę na:", Select(others, value=others[0][1] if others else Select.BLANK,
@@ -381,9 +386,34 @@ class AccountOperationDialog(FormDialog):
             "external": "Np. wpłata pracodawcy/państwa do PPK — zwiększa saldo, ale nie jest dochodem budżetu.",
             "valuation": "Różnica zostanie zapisana jako wzrost/spadek wyceny (nie wpływa na budżet).",
             "interest": "Odsetki zapisują się jako dochód w kopercie „Odsetki i zyski”.",
+            "correction": "Wpisz saldo zgodne z bankiem / portfelem. Różnica zapisze się w historii jako "
+                          "„Korekta salda” — nie jest wydatkiem ani dochodem, więc nie zmienia budżetu.",
         }
         if op in hints:
             yield Label(hints[op], classes="dialog-note")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        if self.operation == "correction":
+            amount = self.query_one("#f-amount", Input)
+            amount.focus()
+            amount.action_select_all()
+            self._update_diff()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "f-amount" and self.operation == "correction":
+            self._update_diff()
+
+    def _update_diff(self) -> None:
+        p = palette()
+        value = parse_amount(self.value("f-amount") or "")
+        label = self.query_one("#f-diff", Label)
+        if value is None:
+            label.update(Text("niepoprawna kwota", style=p.negative))
+            return
+        diff = round(value - float(self.account["balance"] or 0), 2)
+        style = p.positive if diff > 0 else p.negative if diff < 0 else p.muted
+        label.update(Text(money(diff, signed=True) if diff else "bez zmian", style=style))
 
     def submit_form(self) -> Any:
         name = self.account["name"]
@@ -399,6 +429,14 @@ class AccountOperationDialog(FormDialog):
             value = parse_required_amount(self.value("f-amount"), "f-amount", allow_zero=True)
             diff = acc_api.update_valuation(name, value, day, note)
             return {"message": f"Wycena {name}: {money(diff, signed=True)}."}
+        if op == "correction":
+            value = parse_amount(self.value("f-amount") or "")
+            if value is None:
+                raise FormError("Podaj poprawne saldo (może być ujemne, np. -120,50).", "f-amount")
+            diff = acc_api.set_account_balance(name, value, note or "Korekta salda", day)
+            if not diff:
+                return {"message": f"Saldo {name} bez zmian."}
+            return {"message": f"Korekta salda {name}: {money(diff, signed=True)} → {money(value)}."}
         amount = parse_required_amount(self.value("f-amount"), "f-amount")
         if op == "deposit":
             acc_api.transfer_between_accounts(self.value("f-other"), name, amount, day, note)
@@ -444,6 +482,140 @@ class EnvelopeDialog(FormDialog):
         if not ok:
             raise FormError(msg, "f-name")
         return {"message": f"Zapisano kopertę {name}."}
+
+
+ENVELOPE_ADJUST_MODES = [
+    ("Ustaw kwotę „zostało”", "set"),
+    ("Dołóż do koperty (+)", "add"),
+    ("Odejmij z koperty (−)", "sub"),
+    ("Przesuń do innej koperty", "move"),
+    ("Cofnij korekty z tego miesiąca", "clear"),
+]
+
+
+class EnvelopeAdjustDialog(FormDialog):
+    """Korekta koperty w miesiącu roboczym: ustawienie reszty, +/−, przesunięcie, cofnięcie."""
+
+    def __init__(self, category_id: int, mode: str = "set") -> None:
+        self.month = get_active_month_str()
+        self.category_id = int(category_id)
+        self.env = next(e for e in env_api.get_envelope_overview(self.month) if e["id"] == self.category_id)
+        self.mode = mode
+        super().__init__(f"KOREKTA KOPERTY: {self.env['name']} ({self.month})")
+        self.SAVE_LABEL = "ZATWIERDŹ"
+
+    def compose_body(self) -> Iterable[Widget]:
+        e = self.env
+        yield form_row("Stan koperty:", info_line("f-state", self._state_text()))
+        yield form_row("Operacja:", Select(ENVELOPE_ADJUST_MODES, value=self.mode, id="f-mode", allow_blank=False,
+                                           classes="row-select"))
+        yield form_row("Kwota (PLN):", amount_input("f-amount"), row_id="row-amount")
+        others = [(f"{x['name']}  (zostało {money(x['remaining'], '')})", str(x["id"]))
+                  for x in env_api.get_envelope_overview(self.month) if x["id"] != self.category_id]
+        yield form_row("Do koperty:", Select(others, value=others[0][1] if others else Select.BLANK, id="f-target",
+                                             allow_blank=not others, prompt="Wybierz kopertę…", classes="row-select"),
+                       row_id="row-target")
+        yield form_row("Opis:", text_input("f-note", "opcjonalnie"), row_id="row-note")
+        yield form_row("Po zmianie:", info_line("f-after", ""))
+        count = len(env_api.get_envelope_adjustments(self.category_id, self.month))
+        yield Label(f"Korekty dotyczą tylko miesiąca {self.month} (w kopercie elastycznej reszta przechodzi dalej). "
+                    f"Zapisanych korekt w tym miesiącu: {count} (razem {money(e['adjustment'], signed=True)}).",
+                    classes="dialog-note")
+
+    def _state_text(self) -> Text:
+        e, p = self.env, palette()
+        t = Text()
+        t.append("budżet ", style=p.muted)
+        t.append(money(e["budget"], ""))
+        if e["carried"]:
+            t.append(" + z poprz. ", style=p.muted)
+            t.append(money(e["carried"], ""))
+        if e["adjustment"]:
+            t.append(" + korekty ", style=p.muted)
+            t.append(money(e["adjustment"], "", signed=True))
+        t.append(" · wydano ", style=p.muted)
+        t.append(money(e["spent"], ""))
+        t.append(" · zostało ", style=p.muted)
+        t.append(money(e["remaining"]), style=f"bold {p.negative if e['remaining'] < 0 else p.positive}")
+        return t
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self._apply_mode()
+        if self.mode == "set":
+            self.set_value("f-amount", f"{self.env['remaining']:.2f}")
+        self.query_one("#f-amount", Input).focus()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "f-mode":
+            self._apply_mode()
+        self._update_preview()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "f-amount":
+            self._update_preview()
+
+    def _apply_mode(self) -> None:
+        mode = self.value("f-mode")
+        self.toggle_row("row-amount", mode != "clear")
+        self.toggle_row("row-target", mode == "move")
+        self.toggle_row("row-note", mode in ("set", "add", "sub"))
+        self._update_preview()
+
+    def _change(self) -> Optional[float]:
+        """O ile zmieni się „zostało” wybranej koperty (None = błędna kwota)."""
+        mode = self.value("f-mode")
+        if mode == "clear":
+            return -self.env["adjustment"]
+        value = parse_amount(self.value("f-amount") or "")
+        if value is None:
+            return None
+        if mode == "set":
+            return round(value - self.env["remaining"], 2)
+        return value if mode == "add" else -value
+
+    def _update_preview(self) -> None:
+        p = palette()
+        label = self.query_one("#f-after", Label)
+        change = self._change()
+        if change is None:
+            label.update(Text("podaj kwotę", style=p.muted))
+            return
+        after = self.env["remaining"] + change
+        t = Text()
+        t.append("zostanie ", style=p.muted)
+        t.append(money(after), style=f"bold {p.negative if after < 0 else p.positive}")
+        t.append(f"  ({money(change, signed=True)})", style=p.muted)
+        label.update(t)
+
+    def submit_form(self) -> Any:
+        mode = self.value("f-mode")
+        name = self.env["name"]
+        if mode == "clear":
+            removed = env_api.clear_envelope_adjustments(self.category_id, self.month)
+            if not removed:
+                raise FormError("W tym miesiącu nie ma korekt tej koperty.")
+            return {"message": f"Cofnięto korekty koperty {name} ({removed})."}
+        note = self.value("f-note") if mode != "move" else ""
+        if mode == "set":
+            value = parse_amount(self.value("f-amount") or "")
+            if value is None:
+                raise FormError("Podaj poprawną kwotę (może być 0).", "f-amount")
+            diff = env_api.set_envelope_remaining(self.category_id, self.month, value, note)
+            if not diff:
+                return {"message": f"Koperta {name} bez zmian."}
+            return {"message": f"Koperta {name}: zostało {money(value)} ({money(diff, signed=True)})."}
+        amount = parse_required_amount(self.value("f-amount"), "f-amount")
+        if mode == "move":
+            target = self.value("f-target")
+            if not target:
+                raise FormError("Wybierz kopertę docelową.", "f-target")
+            env_api.move_between_envelopes(self.category_id, int(target), self.month, amount)
+            dst = env_api.get_category_by_id(int(target))
+            return {"message": f"Przesunięto {money(amount)}: {name} → {dst['name'] if dst else '?'}."}
+        env_api.adjust_envelope(self.category_id, self.month, amount if mode == "add" else -amount,
+                                note or ("Dołożono do koperty" if mode == "add" else "Odjęto z koperty"))
+        return {"message": f"Koperta {name}: {money(amount if mode == 'add' else -amount, signed=True)}."}
 
 
 # =============================================================================
@@ -531,6 +703,55 @@ class GoalOperationDialog(FormDialog):
         goals_api.update_piggy_bank_balance(int(self.goal["id"]), change, self.value("f-account"), True)
         verb = "Wpłacono" if change > 0 else "Wypłacono"
         return {"message": f"{verb} {money(amount)} ({self.goal['name']})."}
+
+
+class GoalCorrectionDialog(FormDialog):
+    """Korekta stanu celu bez ruchu pieniędzy na kontach."""
+
+    def __init__(self, goal_id: int) -> None:
+        self.goal = dict(goals_api.get_piggy_bank_by_id(goal_id))
+        super().__init__(f"KOREKTA STANU CELU: {self.goal['name']}")
+        self.SAVE_LABEL = "ZATWIERDŹ"
+
+    def compose_body(self) -> Iterable[Widget]:
+        g = self.goal
+        yield form_row("Stan celu:", info_line("f-state", f"{money(float(g['current_amount'] or 0))} / "
+                                                          f"{money(float(g['target_amount'] or 0))}"))
+        yield form_row("Rzeczywisty stan:", amount_input("f-amount", "ile faktycznie jest odłożone",
+                                                         f"{float(g['current_amount'] or 0):.2f}"))
+        yield form_row("Różnica:", info_line("f-diff", "—"))
+        yield Label("Korekta zmienia tylko stan celu — salda kont zostają bez zmian. "
+                    "Żeby przenieść pieniądze między kontem a celem, użyj + / -.", classes="dialog-note")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        amount = self.query_one("#f-amount", Input)
+        amount.focus()
+        amount.action_select_all()
+        self._update_diff()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._update_diff()
+
+    def _update_diff(self) -> None:
+        p = palette()
+        value = parse_amount(self.value("f-amount") or "")
+        label = self.query_one("#f-diff", Label)
+        if value is None or value < 0:
+            label.update(Text("niepoprawna kwota", style=p.negative))
+            return
+        diff = round(value - float(self.goal["current_amount"] or 0), 2)
+        label.update(Text(money(diff, signed=True) if diff else "bez zmian",
+                          style=p.positive if diff > 0 else p.negative if diff < 0 else p.muted))
+
+    def submit_form(self) -> Any:
+        value = parse_amount(self.value("f-amount") or "")
+        if value is None or value < 0:
+            raise FormError("Podaj poprawny stan celu (0 lub więcej).", "f-amount")
+        diff = goals_api.set_goal_amount(int(self.goal["id"]), value)
+        if not diff:
+            return {"message": f"Stan celu {self.goal['name']} bez zmian."}
+        return {"message": f"Korekta celu {self.goal['name']}: {money(diff, signed=True)} → {money(value)}."}
 
 
 # =============================================================================

@@ -41,11 +41,12 @@ class AccountsView(ViewMixin, Vertical):
         ViewAction("withdraw", "-", "WYPŁATA", "WYP."),
         ViewAction("transfer", "^T", "PRZELEW", "PRZEL."),
         ViewAction("valuation", "W", "WYCENA / ODSETKI", "WYCENA"),
+        ViewAction("correction", "K", "KOREKTA SALDA", "KOREKTA"),
         ViewAction("autosave", "A", "AUTO-OSZCZĘDZANIE", "AUTO"),
         ViewAction("delete", "^D", "ZAMKNIJ", "ZAMK."),
     ]
     BINDINGS = [("w", "view_action('valuation')", "Wycena"), ("a", "view_action('autosave')", "Auto"),
-                ("o", "view_action('external')", "Wpłata zewn.")]
+                ("o", "view_action('external')", "Wpłata zewn."), ("k", "view_action('correction')", "Korekta")]
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="acc-header", classes="view-header"):
@@ -62,11 +63,6 @@ class AccountsView(ViewMixin, Vertical):
 
     def select_ref(self, ref: Any) -> None:
         self.query_one("#acc-table", SmartTable).select_id(ref)
-
-    def action_view_action(self, name: str) -> None:
-        handler = getattr(self, f"do_{name}", None)
-        if handler:
-            handler()
 
     # ---------------------------------------------------------------- wybór
 
@@ -96,6 +92,7 @@ class AccountsView(ViewMixin, Vertical):
             ops.append("O wpłata zewnętrzna (np. pracodawca)")
         if info.has_term:
             ops = ["^D zerwij lokatę", "^E edytuj (odnawianie)"]
+        ops.append("K korekta salda")
         rules = get_autosave_rules(row["name"])
         rule_txt = f" · auto: {describe_rule(rules[0])}" if rules else " · A — auto-oszczędzanie"
         label.update(f"{row['name']}: " + " · ".join(ops) + rule_txt)
@@ -119,7 +116,7 @@ class AccountsView(ViewMixin, Vertical):
         row = self._selected()
         if not row:
             return self.warn_select("konto")
-        if acc_api.kind_info(row["account_kind"]).has_term and operation != "close":
+        if acc_api.kind_info(row["account_kind"]).has_term and operation not in ("close", "correction"):
             self.notify("Lokata/obligacje: środki wrócą automatycznie po terminie; ^D — zerwanie.",
                         severity="warning")
             return
@@ -140,6 +137,9 @@ class AccountsView(ViewMixin, Vertical):
             return self.warn_select("konto")
         info = acc_api.kind_info(row["account_kind"])
         self._op("valuation" if info.valuation else "interest")
+
+    def do_correction(self) -> None:
+        self._op("correction")
 
     def do_transfer(self) -> None:
         from src.ui.forms import TransferDialog

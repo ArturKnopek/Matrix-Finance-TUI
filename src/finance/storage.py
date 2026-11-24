@@ -383,6 +383,17 @@ _USER_TABLES_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS envelope_adjustments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id INTEGER NOT NULL,
+        ym          TEXT NOT NULL,
+        amount      REAL NOT NULL,
+        note        TEXT,
+        created_at  TEXT,
+        FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS autosave_rules (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         name           TEXT,
@@ -586,11 +597,11 @@ def sync_active_month() -> None:
 def reset_user_db_hard() -> None:
     with open_user_db(write=True) as conn:
         for table in ("transactions", "accounts", "categories", "piggy_banks", "recurring_payments", "archive",
-                      "autosave_rules", "settings"):
+                      "autosave_rules", "envelope_adjustments", "settings"):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
     init_user_db(get_active_user_db(), 0.0, 0.0)
 
 
 def list_user_tables() -> List[str]:
     return ["settings", "accounts", "categories", "piggy_banks", "transactions", "archive",
-            "recurring_payments", "autosave_rules"]
+            "recurring_payments", "autosave_rules", "envelope_adjustments"]

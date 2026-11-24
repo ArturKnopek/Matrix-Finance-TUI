@@ -27,6 +27,7 @@ class EnvelopesView(ViewMixin, Vertical):
         Col("name", "Koperta", 8, max_width=24),
         Col("budget", "Budżet", 8, align="right", hide_priority=2),
         Col("carried", "Z poprz. m-ca", 8, align="right", hide_priority=3),
+        Col("adjustment", "Korekty", 8, align="right", hide_priority=4),
         Col("available", "Dostępne", 9, align="right", hide_priority=1),
         Col("spent", "Wydano", 8, align="right"),
         Col("remaining", "Zostało", 9, align="right"),
@@ -37,14 +38,18 @@ class EnvelopesView(ViewMixin, Vertical):
         ViewAction("edit", "^E", "EDYTUJ", "EDYT."),
         ViewAction("delete", "^D", "USUŃ", "USUŃ"),
         ViewAction("spend", "+", "WYDATEK Z KOPERTY", "WYDATEK"),
+        ViewAction("adjust", "K", "KOREKTA", "KOREKTA"),
+        ViewAction("move", "M", "PRZESUŃ ŚRODKI", "PRZES."),
     ]
+    BINDINGS = [("k", "view_action('adjust')", "Korekta"), ("m", "view_action('move')", "Przesuń")]
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="env-header", classes="view-header"):
             yield Label("", id="env-title", classes="view-header-title")
             yield Label("", id="env-stats", classes="view-header-stats")
         yield SmartTable(self.COLUMNS, id="env-table", empty_text="brak kopert — ^N dodaje nową")
-        yield Label("↻ = koperta elastyczna (niewydane środki przechodzą na kolejny miesiąc)", classes="view-hint")
+        yield Label("↻ = koperta elastyczna (reszta przechodzi na kolejny miesiąc) · K — korekta stanu · "
+                    "M — przesuń środki do innej koperty", classes="view-hint")
 
     def on_show(self) -> None:
         self.call_after_refresh(self.focus_table)
@@ -77,6 +82,20 @@ class EnvelopesView(ViewMixin, Vertical):
         self.confirm(f"Usunąć kopertę „{row['name']}”?\nTransakcje zostaną bez koperty.",
                      lambda: (delete_category(int(row["id"])), f"Usunięto kopertę {row['name']}.")[1])
 
+    def _adjust(self, mode: str) -> None:
+        from src.ui.forms import EnvelopeAdjustDialog
+
+        row = self._selected()
+        if not row:
+            return self.warn_select("kopertę")
+        self.open_dialog(EnvelopeAdjustDialog(int(row["id"]), mode))
+
+    def do_adjust(self) -> None:
+        self._adjust("set")
+
+    def do_move(self) -> None:
+        self._adjust("move")
+
     def do_spend(self) -> None:
         from src.ui.forms import TransactionDialog
 
@@ -95,6 +114,7 @@ class EnvelopesView(ViewMixin, Vertical):
                 "name": ("↻ " if e["rollover"] else "") + e["name"],
                 "budget": money(e["budget"], "") if e["budget"] else "—",
                 "carried": money(e["carried"], "") if e["carried"] else "—",
+                "adjustment": money(e["adjustment"], "", signed=True) if e["adjustment"] else "—",
                 "available": money(e["available"], "") if e["available"] else "—",
                 "spent": money(e["spent"], ""),
                 "remaining": Text(money(e["remaining"], ""), style=remaining_style),

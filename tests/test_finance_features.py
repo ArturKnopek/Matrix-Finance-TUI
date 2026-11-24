@@ -127,6 +127,79 @@ def test_rollover_envelope_carries_unspent_money(user_db):
     assert summary["budgeted"] == pytest.approx(700)
 
 
+def test_envelope_corrections_and_moving_money(user_db):
+    with envelopes.open_user_db(write=True) as conn:
+        conn.execute("UPDATE categories SET limit_amount = 500, rollover = 1, rollover_since = '2026-01' "
+                     "WHERE name = 'Jedzenie'")
+        conn.execute("UPDATE categories SET limit_amount = 200, rollover = 0 WHERE name = 'Transport'")
+    ids = {c["name"]: c["id"] for c in envelopes.get_all_categories_data()}
+    food, transport = ids["Jedzenie"], ids["Transport"]
+    ledger.add_transaction("2026-01-10", "Wydatek", "Jedzenie", "Karta", "A", 300, "", True)
+
+    # ustawienie „zostało” = 250 (było 200) -> korekta +50
+    assert envelopes.set_envelope_remaining(food, "2026-01", 250) == pytest.approx(50)
+    jan = {e["name"]: e for e in envelopes.get_envelope_overview("2026-01")}
+    assert jan["Jedzenie"]["adjustment"] == pytest.approx(50)
+    assert jan["Jedzenie"]["remaining"] == pytest.approx(250)
+    # korekta przechodzi dalej w kopercie elastycznej
+    feb = {e["name"]: e for e in envelopes.get_envelope_overview("2026-02")}
+    assert feb["Jedzenie"]["carried"] == pytest.approx(250)
+
+    # przesunięcie 80 zł z Transportu do Jedzenia
+    envelopes.move_between_envelopes(transport, food, "2026-01", 80)
+    jan = {e["name"]: e for e in envelopes.get_envelope_overview("2026-01")}
+    assert jan["Transport"]["remaining"] == pytest.approx(120)
+    assert jan["Jedzenie"]["remaining"] == pytest.approx(330)
+    with pytest.raises(ValueError):
+        envelopes.move_between_envelopes(transport, food, "2026-01", 500)  # za mało w kopercie
+    with pytest.raises(ValueError):
+        envelopes.move_between_envelopes(food, food, "2026-01", 10)
+
+    envelopes.adjust_envelope(transport, "2026-01", -20)
+    assert {e["name"]: e for e in envelopes.get_envelope_overview("2026-01")}["Transport"]["remaining"] \
+        == pytest.approx(100)
+    # korekty nie zmieniają sald kont ani bilansu
+    assert analytics.get_monthly_balance("2026-01") == (0.0, 300.0)
+    assert envelopes.clear_envelope_adjustments(transport, "2026-01") == 2
+    assert {e["name"]: e for e in envelopes.get_envelope_overview("2026-01")}["Transport"]["remaining"] \
+        == pytest.approx(200)
+    # usunięcie koperty usuwa jej korekty
+    envelopes.delete_category(food)
+    with envelopes.open_user_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM envelope_adjustments WHERE category_id = ?",
+                            (food,)).fetchone()[0] == 0
+
+
+def test_corrections_for_savings_account_and_goal(user_db):
+    db = user_db
+    accounts.add_account("Konto oszczędnościowe", 1000, account_kind="savings", interest_rate=5)
+    diff = accounts.set_account_balance("Konto oszczędnościowe", 1012.34, "Zgodnie z bankiem", "2026-03-05")
+    assert diff == pytest.approx(12.34)
+    assert db.get_account_balance("Konto oszczędnościowe") == pytest.approx(1012.34)
+    row = ledger.fetch_transactions(account_filter="Konto oszczędnościowe")[0]
+    assert row["date"] == "2026-03-05" and row["entry_subtype"] == "correction_up"
+    assert analytics.get_monthly_balance("2026-03") == (0.0, 0.0)  # korekta to nie dochód
+    assert accounts.set_account_balance("Konto oszczędnościowe", -50) == pytest.approx(-1062.34)  # debet
+
+    goals.add_piggy_bank("Wakacje", 1000, "Karta")
+    g_id = goals.get_all_piggy_banks()[0]["id"]
+    assert goals.set_goal_amount(g_id, 300) == pytest.approx(300)
+    assert float(goals.get_piggy_bank_by_id(g_id)["current_amount"]) == pytest.approx(300)
+    assert db.get_account_balance("Karta") == pytest.approx(1000)  # bez ruchu na koncie
+    with pytest.raises(ValueError):
+        goals.set_goal_amount(g_id, -1)
+
+
+def test_export_import_keeps_envelope_corrections(user_db, tmp_path):
+    food = {c["name"]: c["id"] for c in envelopes.get_all_categories_data()}["Jedzenie"]
+    envelopes.adjust_envelope(food, "2026-04", 75, "premia")
+    path = str(tmp_path / "dane.json")
+    data_io.export_json(path)
+    envelopes.clear_envelope_adjustments(food, "2026-04")
+    data_io.import_json(path)
+    assert [float(r["amount"]) for r in envelopes.get_envelope_adjustments(food, "2026-04")] == [75.0]
+
+
 # --------------------------------------------------------------------------- auto-oszczędzanie
 
 def test_income_percent_autosave_to_account(user_db):

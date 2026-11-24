@@ -9,6 +9,11 @@ miesiąc: dostępne = budżet + przeniesione z poprzedniego miesiąca.
 
 Wydane w kopercie = wydatki - zwroty (dochody przypisane do tej kategorii).
 Przelewy i operacje na celach nie obciążają kopert.
+
+Korekty kopert (tabela envelope_adjustments) zmieniają kwotę dostępną w danym
+miesiącu: ręczne ustawienie „zostało”, dołożenie/odjęcie kwoty albo przesunięcie
+środków między kopertami. W kopertach elastycznych korekta przechodzi dalej
+razem z niewydaną resztą.
 """
 
 from __future__ import annotations
@@ -108,7 +113,79 @@ def delete_category(c_id: int) -> None:
         row = conn.execute("SELECT name FROM categories WHERE id = ?", (c_id,)).fetchone()
         if row:
             conn.execute("UPDATE recurring_payments SET category = NULL WHERE category = ?", (row[0],))
+        conn.execute("DELETE FROM envelope_adjustments WHERE category_id = ?", (c_id,))
         conn.execute("DELETE FROM categories WHERE id = ?", (c_id,))
+
+
+# =============================================================================
+# Korekty kopert
+# =============================================================================
+
+def _adjustments(conn: sqlite3.Connection, start_ym: str, end_ym: str) -> Dict[Tuple[int, str], float]:
+    out: Dict[Tuple[int, str], float] = defaultdict(float)
+    for row in conn.execute("SELECT category_id, ym, SUM(amount) AS total FROM envelope_adjustments "
+                            "WHERE ym BETWEEN ? AND ? GROUP BY category_id, ym", (start_ym, end_ym)).fetchall():
+        out[(int(row["category_id"]), row["ym"])] = float(row["total"] or 0.0)
+    return out
+
+
+def adjust_envelope(c_id: int, ym: str, amount: float, note: str = "") -> None:
+    """Dokłada (+) albo odejmuje (−) kwotę dostępną w kopercie w danym miesiącu."""
+    amount = round(float(amount), 2)
+    if amount == 0:
+        raise ValueError("Kwota korekty nie może być równa zero.")
+    with open_user_db(write=True) as conn:
+        if not conn.execute("SELECT 1 FROM categories WHERE id = ?", (c_id,)).fetchone():
+            raise ValueError("Nie ma takiej koperty.")
+        conn.execute("INSERT INTO envelope_adjustments (category_id, ym, amount, note, created_at) "
+                     "VALUES (?, ?, ?, ?, ?)", (c_id, ym, amount, note or "Korekta koperty", now_iso()))
+
+
+def _envelope(c_id: int, ym: str) -> Dict[str, Any]:
+    env = next((e for e in get_envelope_overview(ym) if e["id"] == c_id), None)
+    if env is None:
+        raise ValueError("Nie ma takiej koperty.")
+    return env
+
+
+def set_envelope_remaining(c_id: int, ym: str, target_remaining: float, note: str = "") -> float:
+    """Ustawia kwotę „zostało” koperty w miesiącu (zapisując różnicę jako korektę). Zwraca różnicę."""
+    diff = round(float(target_remaining) - _envelope(c_id, ym)["remaining"], 2)
+    if diff:
+        adjust_envelope(c_id, ym, diff, note or "Korekta stanu koperty")
+    return diff
+
+
+def move_between_envelopes(src_id: int, dst_id: int, ym: str, amount: float) -> None:
+    """Przesuwa środki z jednej koperty do drugiej w danym miesiącu (metoda kopertowa)."""
+    amount = round(float(amount), 2)
+    if src_id == dst_id:
+        raise ValueError("Wybierz dwie różne koperty.")
+    if amount <= 0:
+        raise ValueError("Kwota musi być większa od zera.")
+    src = _envelope(src_id, ym)
+    dst = _envelope(dst_id, ym)
+    if src["remaining"] + 1e-9 < amount:
+        raise ValueError(f"W kopercie „{src['name']}” zostało tylko {src['remaining']:.2f} zł.")
+    with open_user_db(write=True) as conn:
+        stamp = now_iso()
+        conn.execute("INSERT INTO envelope_adjustments (category_id, ym, amount, note, created_at) VALUES (?,?,?,?,?)",
+                     (src_id, ym, -amount, f"Przesunięcie do: {dst['name']}", stamp))
+        conn.execute("INSERT INTO envelope_adjustments (category_id, ym, amount, note, created_at) VALUES (?,?,?,?,?)",
+                     (dst_id, ym, amount, f"Przesunięcie z: {src['name']}", stamp))
+
+
+def get_envelope_adjustments(c_id: int, ym: str) -> List[sqlite3.Row]:
+    with open_user_db() as conn:
+        return conn.execute("SELECT * FROM envelope_adjustments WHERE category_id = ? AND ym = ? ORDER BY id",
+                            (c_id, ym)).fetchall()
+
+
+def clear_envelope_adjustments(c_id: int, ym: str) -> int:
+    """Usuwa wszystkie korekty koperty w miesiącu. Zwraca liczbę usuniętych."""
+    with open_user_db(write=True) as conn:
+        return conn.execute("DELETE FROM envelope_adjustments WHERE category_id = ? AND ym = ?",
+                            (c_id, ym)).rowcount
 
 
 # =============================================================================
@@ -155,6 +232,7 @@ def get_envelope_overview(month: str) -> List[Dict[str, Any]]:
         if months_between(first, month) > MAX_ROLLOVER_MONTHS:
             first = month_add(month, -MAX_ROLLOVER_MONTHS)
         spending = _spending_by_month(conn, first, month)
+        adjustments = _adjustments(conn, first, month)
 
     out = []
     for cat in cats:
@@ -166,11 +244,12 @@ def get_envelope_overview(month: str) -> List[Dict[str, Any]]:
         if rollover and since and since < month:
             m = max(since, first)
             while m < month:
-                available = budget + carried
+                available = budget + carried + adjustments.get((cat["id"], m), 0.0)
                 carried = max(0.0, available - max(0.0, spending.get((name, m), 0.0)))
                 m = month_add(m, 1)
         spent = max(0.0, spending.get((name, month), 0.0))  # kategorie dochodowe nie „wydają”
-        available = budget + carried
+        adjustment = adjustments.get((cat["id"], month), 0.0)
+        available = budget + carried + adjustment
         remaining = available - spent
         pct = (spent / available * 100.0) if available > 0 else None
         out.append({
@@ -180,6 +259,7 @@ def get_envelope_overview(month: str) -> List[Dict[str, Any]]:
             "budget": budget,
             "rollover": rollover,
             "carried": carried,
+            "adjustment": adjustment,
             "available": available,
             "spent": spent,
             "remaining": remaining,
@@ -204,9 +284,10 @@ def get_budget_summary(month: str) -> Dict[str, float]:
         "expense": expense,
         "budgeted": budgeted,
         "carried": sum(e["carried"] for e in envelopes),
+        "adjusted": sum(e["adjustment"] for e in envelopes),
         "available": available,
         "spent": spent_in_envelopes,
         "remaining": remaining,
-        "unallocated": income - budgeted,
+        "unallocated": income - budgeted - sum(e["adjustment"] for e in envelopes),
         "over_count": sum(1 for e in envelopes if e["over"]),
     }

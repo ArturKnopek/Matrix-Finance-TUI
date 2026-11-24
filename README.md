@@ -8,6 +8,7 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 * **Koperty** — każda kategoria wydatków ma miesięczny budżet. Pulpit i zakładka *Koperty* pokazują: dostępne, wydane, pozostało i wykorzystanie (pasek).
 * **Koperty elastyczne (↻)** — niewydane środki przechodzą na kolejny miesiąc i zwiększają budżet (np. budżet 500 zł, wydano 420 zł → w kolejnym miesiącu dostępne 580 zł).
 * **Do rozdysponowania** — ile przychodów nie zostało jeszcze przydzielonych do kopert.
+* **Korekty kopert** (`K`) — ręczne ustawienie kwoty „zostało”, dołożenie/odjęcie środków albo cofnięcie korekt miesiąca; **przesuwanie środków między kopertami** (`M`), np. z „Rozrywki” do „Jedzenia”.
 
 ### Konta i produkty finansowe
 | Grupa | Rodzaje kont |
@@ -20,12 +21,13 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 * **Przelewy między kontami** (`Ctrl+T` z każdego miejsca) — nie są ani wydatkiem, ani dochodem, więc nie zaburzają budżetu.
 * **Lokaty i obligacje** — zakładane z dowolnego konta (np. z Revoluta), z oprocentowaniem, okresem i podatkiem Belki (19%). Postęp okresu i prognoza zysku netto; po terminie odsetki dopisują się automatycznie, a środki wracają na konto źródłowe albo lokata odnawia się z kapitalizacją. Można ją też zerwać (zwrot kapitału bez odsetek).
 * **Inwestycje** — wpłaty/wypłaty, ręczna aktualizacja wyceny (zysk/strata), wpłaty zewnętrzne (np. pracodawca do PPK), dopisywanie odsetek.
+* **Korekta salda** (`K`) dla każdego konta — także oszczędnościowego, lokaty i inwestycji: wpisujesz rzeczywiste saldo z banku, a różnica zapisuje się w historii jako „Korekta salda (+/−)” (nie jest wydatkiem ani dochodem).
 * **Majątek netto** z podziałem na grupy, środki dostępne i ulokowane.
 
 ### Oszczędzanie automatyczne
 * **Auto-oszczędzanie procentowe** — X% każdego wpływu na wybrane konto trafia na konto oszczędnościowe lub do celu.
 * **Zaokrąglenia** — każdy wydatek zaokrąglany w górę do pełnych N zł, różnica odkładana (jak w Revolut).
-* **Cele oszczędnościowe** z terminem — aplikacja liczy, ile odkładać miesięcznie, żeby zdążyć.
+* **Cele oszczędnościowe** z terminem — aplikacja liczy, ile odkładać miesięcznie, żeby zdążyć. Stan celu można skorygować (`K`) bez ruszania sald kont.
 * **Zlecenia cykliczne**: wydatki, dochody, wpłaty na cel i przelewy (np. co miesiąc na IKE) — dzienne, tygodniowe, miesięczne, kwartalne, roczne. Zaległe terminy księgowane są wszystkie naraz.
 
 ### Analiza i raporty
@@ -74,6 +76,8 @@ Dane: `~/.matrix_finance/` (`auth.db`, `data/<id>.db` lub zaszyfrowane `data/<id
 | `Ctrl+E` / `Ctrl+D` | edytuj / usuń zaznaczone (w Kontach `Ctrl+D` zamyka konto lub zrywa lokatę) |
 | `+` / `-` | wpłata / wypłata (Konta, Cele); w Kopertach `+` = wydatek z koperty |
 | `W` / `A` / `O` | Konta: wycena lub odsetki / reguła auto-oszczędzania / wpłata zewnętrzna |
+| `K` | korekta: saldo konta (Konta) · stan koperty (Koperty) · stan celu (Cele) |
+| `M` | Koperty: przesuń środki do innej koperty |
 | `Ctrl+P` | pauza / wznowienie zlecenia lub reguły |
 | `Ctrl+R` | odśwież, zaksięguj zaległe zlecenia, rozlicz lokaty |
 | `P` / `G` / `C` | Raporty: drukuj / TXT / CSV |

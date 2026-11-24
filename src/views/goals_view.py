@@ -36,8 +36,10 @@ class GoalsView(ViewMixin, Vertical):
         ViewAction("edit", "^E", "EDYTUJ", "EDYT."),
         ViewAction("deposit", "+", "WPŁAĆ", "WPŁ."),
         ViewAction("withdraw", "-", "WYPŁAĆ", "WYP."),
+        ViewAction("correction", "K", "KOREKTA STANU", "KOREKTA"),
         ViewAction("delete", "^D", "USUŃ", "USUŃ"),
     ]
+    BINDINGS = [("k", "view_action('correction')", "Korekta")]
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="goals-header", classes="view-header"):
@@ -76,6 +78,12 @@ class GoalsView(ViewMixin, Vertical):
 
         row = self._selected()
         self.open_dialog(GoalOperationDialog(int(row["id"]), op)) if row else self.warn_select("cel")
+
+    def do_correction(self) -> None:
+        from src.ui.forms import GoalCorrectionDialog
+
+        row = self._selected()
+        self.open_dialog(GoalCorrectionDialog(int(row["id"]))) if row else self.warn_select("cel")
 
     def do_deposit(self) -> None:
         self._operation("deposit")

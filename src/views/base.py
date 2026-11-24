@@ -69,6 +69,12 @@ class ViewMixin:
     def has_view_action(self, name: str) -> bool:
         return any(a.name == name for a in self.ACTIONS) and callable(getattr(self, f"do_{name}", None))
 
+    def action_view_action(self, name: str) -> None:
+        """Skróty literowe widoku (np. K = korekta) — działają, gdy fokus jest w zakładce."""
+        handler = getattr(self, f"do_{name}", None)
+        if callable(handler):
+            handler()
+
     def run_view_action(self, name: str) -> bool:
         handler = getattr(self, f"do_{name}", None)
         if not self.has_view_action(name) or not callable(handler):

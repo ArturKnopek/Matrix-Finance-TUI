@@ -128,14 +128,20 @@ def update_account_balance(account_name: str, amount_change: float) -> None:
         change_balance(conn, account_name, amount_change)
 
 
-def set_account_balance(account_name: str, new_balance: float, note: str = "Korekta salda") -> float:
-    """Ustawia saldo, zapisując różnicę jako wpis „Korekta salda” (ślad w historii)."""
+def set_account_balance(account_name: str, new_balance: float, note: str = "Korekta salda",
+                        day: Optional[str] = None) -> float:
+    """
+    Korekta salda: ustawia rzeczywiste saldo konta, zapisując różnicę jako wpis
+    „Korekta salda (+/−)” (Transfer — nie jest wydatkiem ani dochodem, nie zmienia budżetu).
+    Zwraca różnicę.
+    """
     with open_user_db(write=True) as conn:
         require_account(conn, account_name)
         diff = round(float(new_balance) - account_balance_in(conn, account_name), 2)
         if diff:
-            post_entry(conn, date.today().isoformat(), TRANSFER, None, account_name, note, abs(diff),
-                       "[KOREKTA] ręczna zmiana salda", subtype="correction_up" if diff > 0 else "correction_down")
+            post_entry(conn, day or date.today().isoformat(), TRANSFER, None, account_name,
+                       note or "Korekta salda", abs(diff), "[KOREKTA] ręczna zmiana salda",
+                       subtype="correction_up" if diff > 0 else "correction_down")
         return diff
 
 

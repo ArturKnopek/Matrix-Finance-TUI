@@ -260,6 +260,66 @@ def test_goal_deposit_with_plus_key(user_db):
     assert exp == 0  # wpłata na cel nie jest wydatkiem
 
 
+def test_corrections_from_views(user_db):
+    db = user_db
+    goals.add_piggy_bank("Wakacje", 1000, "Karta")
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(120, 36)) as pilot:
+            await _open_dashboard(app, pilot, db)
+            # konto: K -> korekta salda (pierwsze konto w tabeli)
+            await pilot.press("4")
+            await pilot.pause(0.3)
+            table = app.screen.query_one("#acc-table", SmartTable)
+            table.select_id("Gotówka")
+            await pilot.pause(0.1)
+            await pilot.press("k")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "AccountOperationDialog"
+            app.screen.query_one("#f-amount").value = "180,50"
+            await pilot.pause(0.1)
+            assert "-19.50" in str(app.screen.query_one("#f-diff").render())
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "MainDashboard"
+            # koperta: M -> przesunięcie, K -> ustaw „zostało”
+            await pilot.press("3")
+            await pilot.pause(0.3)
+            await pilot.press("k")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "EnvelopeAdjustDialog"
+            app.screen.query_one("#f-mode").value = "add"
+            app.screen.query_one("#f-amount").value = "40"
+            await pilot.pause(0.1)
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "MainDashboard"
+            await pilot.press("m")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "EnvelopeAdjustDialog"
+            assert app.screen.query_one("#row-target").display
+            await pilot.press("escape")
+            await pilot.pause(0.2)
+            # cel: K -> korekta stanu
+            await pilot.press("5")
+            await pilot.pause(0.3)
+            await pilot.press("k")
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "GoalCorrectionDialog"
+            app.screen.query_one("#f-amount").value = "250"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.3)
+
+    run(scenario())
+    assert db.get_account_balance("Gotówka") == pytest.approx(180.5)
+    assert float(goals.get_all_piggy_banks()[0]["current_amount"]) == pytest.approx(250.0)
+    from src.finance import envelopes
+
+    month = storage.get_active_month_str()
+    assert sum(e["adjustment"] for e in envelopes.get_envelope_overview(month)) == pytest.approx(40.0)
+
+
 def test_new_recurring_in_the_past_offers_catch_up(user_db):
     db = user_db
     start = (date.today() - timedelta(days=14)).isoformat()

@@ -102,6 +102,24 @@ def update_piggy_bank_balance(p_id: int, amount_change: float, selected_account:
         conn.execute("UPDATE accounts SET balance = balance - ? WHERE name = ?", (amount_change, selected_account))
 
 
+def set_goal_amount(p_id: int, new_amount: float) -> float:
+    """
+    Korekta stanu celu: ustawia zgromadzoną kwotę bez ruchu pieniędzy na kontach
+    (np. gdy stan celu rozjechał się z rzeczywistością). Zwraca różnicę.
+    """
+    new_amount = round(float(new_amount), 2)
+    if new_amount < 0:
+        raise ValueError("Stan celu nie może być ujemny.")
+    with open_user_db(write=True) as conn:
+        piggy = conn.execute("SELECT current_amount FROM piggy_banks WHERE id = ?", (p_id,)).fetchone()
+        if not piggy:
+            raise ValueError("Nie znaleziono celu.")
+        diff = round(new_amount - float(piggy[0] or 0.0), 2)
+        if diff:
+            conn.execute("UPDATE piggy_banks SET current_amount = ? WHERE id = ?", (new_amount, p_id))
+        return diff
+
+
 def delete_piggy_bank(p_id: int, refund: bool = True) -> float:
     """Usuwa cel; zgromadzone środki (refund=True) wracają na konto celu. Zwraca zwróconą kwotę."""
     refunded = 0.0
