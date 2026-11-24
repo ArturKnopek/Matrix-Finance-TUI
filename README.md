@@ -51,6 +51,22 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 
 ## Instalacja i uruchomienie
 
+### Windows — instalator (zalecane)
+
+Pobierz **`MatrixFinance-Setup-<wersja>.exe`** (zakładka *Releases* albo artefakt akcji *Instalator Windows*) i uruchom go:
+
+* instaluje program **razem z własnym Pythonem** — nie trzeba niczego doinstalowywać ani mieć uprawnień administratora,
+* tworzy **skrót na pulpicie** i w menu Start (program, „Sprawdź instalację”, folder z danymi, deinstalator),
+* dodaje wpis w *Ustawienia → Aplikacje* (odinstalowanie), aktualizacja = uruchomienie nowszego instalatora,
+* dane (`%USERPROFILE%\.matrix_finance`) nie są ruszane przy aktualizacji; deinstalator pyta o nie osobno (domyślnie zostają),
+* program otwiera się w **Windows Terminal** (jeśli jest — Windows 11 ma go domyślnie), w przeciwnym razie w zwykłej konsoli.
+
+Instalator nie ma płatnego podpisu cyfrowego, więc Windows może pokazać „System Windows ochronił ten komputer” → *Więcej informacji* → *Uruchom mimo to*. Instalacja cicha: `MatrixFinance-Setup-<wersja>.exe /S`.
+
+Budowanie instalatora (Linux lub Windows, potrzebny NSIS 3): `python installer/windows/build_installer.py` → `dist/`. Python dla Windows pobierany jest z oficjalnego pakietu NuGet PSF i weryfikowany sumą SHA-256.
+
+### Ze źródeł (Linux, macOS, Windows)
+
 ```bash
 git clone https://github.com/ArturKnopek/Matrix-Finance-TUI.git
 cd Matrix-Finance-TUI
@@ -60,9 +76,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
+Test instalacji (na danych tymczasowych): `python main.py --selftest`.
+
 Opcjonalnie (YubiKey): `pip install yubikey-manager` i przygotowanie klucza: `ykman otp chalresp --generate --touch 2`.
 
-Dane: `~/.matrix_finance/` (`auth.db`, `data/<id>.db` lub zaszyfrowane `data/<id>.db.enc`). Logi błędów: `~/.matrix_finance/matrix.log`. Eksporty i raporty: `~/Documents/Matrix_Finance/`.
+Dane: `~/.matrix_finance/` — zmienna `MATRIX_FINANCE_HOME` zmienia lokalizację (`auth.db`, `data/<id>.db` lub zaszyfrowane `data/<id>.db.enc`). Logi błędów: `~/.matrix_finance/matrix.log`. Eksporty i raporty: `~/Documents/Matrix_Finance/`.
 
 ## Skróty klawiszowe
 
@@ -101,6 +119,8 @@ src/core/      auth (hasła), vault (szyfrowanie na dysku), yubikey (2FA)
 src/ui/        theme (motywy), widgets (paski, kalendarz, animacja), smart_table, dialogs, forms
 src/views/     zakładki aplikacji
 src/screens/   powitanie, logowanie, ekran główny, okna systemowe
+src/selftest.py  test instalacji (python main.py --selftest)
+installer/windows/  instalator Windows (NSIS): skrypt budujący, uruchamiacz, ikona, instrukcja
 ```
 
 ## Testy

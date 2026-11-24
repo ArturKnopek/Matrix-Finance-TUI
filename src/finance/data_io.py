@@ -42,8 +42,9 @@ log = logging.getLogger(__name__)
 
 
 def default_export_dir() -> Path:
-    docs = Path.home() / "Documents"
-    out = (docs if docs.exists() else Path.home()) / "Matrix_Finance"
+    from src.utils.paths import documents_dir
+
+    out = documents_dir() / "Matrix_Finance"
     out.mkdir(parents=True, exist_ok=True)
     return out
 

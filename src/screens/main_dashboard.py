@@ -37,7 +37,7 @@ from src.views.reports_view import ReportsView
 from src.views.settings_view import SettingsView
 from src.views.transactions_view import TransactionsView
 
-APP_VERSION = "2.0"
+from src.version import APP_VERSION  # noqa: E402
 
 # (id widoku, klasa, etykieta w menu)
 MENU = [

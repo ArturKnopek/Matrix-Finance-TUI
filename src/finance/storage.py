@@ -18,7 +18,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator, List, Optional, Tuple
 
-PROJECT_ROOT = Path.home() / ".matrix_finance"
+from src.utils.paths import data_home
+
+PROJECT_ROOT = data_home()
 PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUTH_DB = str(PROJECT_ROOT / "auth.db")

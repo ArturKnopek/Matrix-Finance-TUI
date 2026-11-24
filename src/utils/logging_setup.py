@@ -12,7 +12,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-LOG_DIR = Path.home() / ".matrix_finance"
+from src.utils.paths import data_home
+
+LOG_DIR = data_home()
 MAIN_LOG = LOG_DIR / "matrix.log"
 DEBUG_LOG = LOG_DIR / "debug.log"
 _FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"

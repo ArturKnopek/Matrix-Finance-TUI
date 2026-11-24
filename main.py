@@ -1,6 +1,18 @@
 import sys
 import logging
+import os
 from pathlib import Path
+
+USAGE = """Matrix Finance — budżet domowy i oszczędzanie kopertowe (terminal).
+
+Użycie: python main.py [opcja]
+  (bez opcji)    uruchamia program
+  --selftest     test instalacji na danych tymczasowych (Twoje dane nie są dotykane);
+                 z --pause okno czeka na Enter
+  --version      wersja programu
+  --help         ta pomoc
+
+Dane: ~/.matrix_finance (zmienna MATRIX_FINANCE_HOME zmienia lokalizację)."""
 
 
 def _ensure_project_root_on_path() -> None:
@@ -25,8 +37,42 @@ def _setup_logging() -> None:
         logging.warning(f"Nie udało się skonfigurować logów w pliku: {e}")
 
 
-def main() -> int:
+def _pause_if_launcher() -> None:
+    """Okno konsoli otwarte przez skrót znika po zakończeniu — daj przeczytać komunikat błędu."""
+    if os.environ.get("MATRIX_FINANCE_PAUSE_ON_ERROR") == "1" and sys.stdin and sys.stdin.isatty():
+        try:
+            input("\nNaciśnij Enter, aby zamknąć okno...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+
+def main(argv: list | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
     _ensure_project_root_on_path()
+    if any(a in ("-h", "--help", "/?") for a in args):
+        print(USAGE)
+        return 0
+    if "--version" in args:
+        from src.version import APP_NAME, APP_VERSION
+
+        print(f"{APP_NAME} {APP_VERSION}")
+        return 0
+    if "--selftest" in args:
+        from src.selftest import run_selftest
+
+        code = run_selftest()
+        if "--pause" in args and sys.stdin and sys.stdin.isatty():  # okno otwarte ze skrótu „Sprawdź instalację”
+            try:
+                input("\nNaciśnij Enter, aby zamknąć okno...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+        elif code:
+            _pause_if_launcher()
+        return code
+    if args:
+        print(f"Nieznana opcja: {' '.join(args)}\n\n{USAGE}")
+        return 2
+
     _setup_logging()
 
     # Importy po ustawieniu sys.path (bezpieczniej)
@@ -43,7 +89,7 @@ def main() -> int:
         logging.error(f"Nie udało się utworzyć tabel: {e}\n")
 
         # Pauza tylko jeśli uruchomione w interaktywnym terminalu
-        if sys.stdin.isatty():
+        if sys.stdin and sys.stdin.isatty():
             input("Naciśnij Enter, aby zamknąć program...")
 
         return 1
@@ -68,7 +114,12 @@ def main() -> int:
         app.run()
     finally:
         app.close_vault()  # zaszyfrowana baza zawsze zapisana, także po błędzie
-    return 0
+    code = app.return_code or 0
+    if code:
+        logging.getLogger(__name__).error("Program zakończył się błędem (kod %s).", code)
+        print("\nSzczegóły błędu: ~/.matrix_finance/matrix.log")
+        _pause_if_launcher()
+    return code
 
 
 if __name__ == "__main__":

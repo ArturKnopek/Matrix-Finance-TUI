@@ -15,6 +15,7 @@ import pytest
 _TEST_HOME = tempfile.mkdtemp(prefix="matrix_finance_tests_")
 os.environ["HOME"] = _TEST_HOME
 os.environ["USERPROFILE"] = _TEST_HOME  # Windows
+os.environ.pop("MATRIX_FINANCE_HOME", None)  # zawsze katalog testowy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:

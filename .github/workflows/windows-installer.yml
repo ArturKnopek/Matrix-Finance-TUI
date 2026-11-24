@@ -1,0 +1,145 @@
+# Instalator Windows: budowa (Linux + NSIS) i test na prawdziwym Windows
+# (cicha instalacja, skróty, wpis w rejestrze, test programu, aktualizacja, deinstalacja).
+# Po wypchnięciu tagu v* (np. v2.1.0) instalator trafia do zakładki Releases.
+name: Instalator Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths:
+      - "installer/**"
+      - ".github/workflows/windows-installer.yml"
+      - "requirements.txt"
+      - "src/version.py"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Budowa instalatora
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: NSIS
+        run: sudo apt-get update -q && sudo apt-get install -y -q nsis
+      - name: Budowa
+        run: python installer/windows/build_installer.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MatrixFinance-Setup
+          path: dist/MatrixFinance-Setup-*
+          if-no-files-found: error
+
+  test-windows:
+    name: Test na Windows
+    needs: build
+    runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MatrixFinance-Setup
+
+      - name: Instalacja cicha (/S)
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem MatrixFinance-Setup-*.exe | Select-Object -First 1).FullName
+          $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "instalator zwrócił $($p.ExitCode)" }
+          $inst = Join-Path $env:LOCALAPPDATA 'Programs\MatrixFinance'
+          foreach ($f in 'python\python.exe', 'python\pythonw.exe', 'app\main.py', 'MatrixFinance.pyw',
+                         'MatrixFinance.ico', 'INSTRUKCJA.txt', 'Odinstaluj.exe') {
+            if (-not (Test-Path (Join-Path $inst $f))) { throw "brak pliku: $f" }
+          }
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $lnk = Join-Path $desktop 'Matrix Finance.lnk'
+          if (-not (Test-Path $lnk)) { throw 'brak skrótu na pulpicie' }
+          $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+          "Skrót: $($shortcut.TargetPath) $($shortcut.Arguments)"
+          if (-not (Test-Path $shortcut.TargetPath)) { throw 'skrót wskazuje nieistniejący plik' }
+          $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Matrix Finance'
+          Get-ChildItem $menu | Select-Object -ExpandProperty Name
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MatrixFinance'
+          Get-ItemProperty $key | Format-List DisplayName, DisplayVersion, InstallLocation, EstimatedSize, UninstallString
+          "{0:N1} MB" -f ((Get-ChildItem $inst -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: Test programu (--selftest)
+        shell: pwsh
+        run: |
+          $inst = Join-Path $env:LOCALAPPDATA 'Programs\MatrixFinance'
+          & "$inst\python\python.exe" "$inst\app\main.py" --version
+          & "$inst\python\python.exe" "$inst\app\main.py" --selftest
+          if ($LASTEXITCODE -ne 0) { throw "selftest: $LASTEXITCODE" }
+          & "$inst\python\python.exe" "$inst\MatrixFinance.pyw" --dry-run
+          & "$inst\python\python.exe" "$inst\MatrixFinance.pyw" --dry-run --console
+
+      - name: Start ze skrótu (okno konsoli)
+        shell: pwsh
+        run: |
+          $inst = Join-Path $env:LOCALAPPDATA 'Programs\MatrixFinance'
+          $env:MATRIX_FINANCE_NO_WT = '1'
+          Start-Process "$inst\python\pythonw.exe" -ArgumentList "`"$inst\MatrixFinance.pyw`""
+          Start-Sleep -Seconds 12
+          $running = Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
+            Where-Object { $_.CommandLine -like '*main.py*' }
+          $running | Select-Object ProcessId, CommandLine | Format-List
+          $log = Join-Path $env:USERPROFILE '.matrix_finance\matrix.log'
+          if (Test-Path $log) { Get-Content $log -Tail 40 }
+          if (-not $running) { throw 'program nie działa po uruchomieniu ze skrótu' }
+          $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+          Start-Sleep -Seconds 2
+
+      - name: Aktualizacja (ponowna instalacja)
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem MatrixFinance-Setup-*.exe | Select-Object -First 1).FullName
+          $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "ponowna instalacja: $($p.ExitCode)" }
+          $inst = Join-Path $env:LOCALAPPDATA 'Programs\MatrixFinance'
+          & "$inst\python\python.exe" "$inst\app\main.py" --version
+          if ($LASTEXITCODE -ne 0) { throw 'program nie działa po aktualizacji' }
+
+      - name: Deinstalacja cicha (dane zostają)
+        shell: pwsh
+        run: |
+          $inst = Join-Path $env:LOCALAPPDATA 'Programs\MatrixFinance'
+          $data = Join-Path $env:USERPROFILE '.matrix_finance'
+          Start-Process "$inst\Odinstaluj.exe" -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path "$inst\app"); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path "$inst\app") { throw 'pliki programu nie zostały usunięte' }
+          if (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Matrix Finance.lnk')) { throw 'został skrót' }
+          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\MatrixFinance') { throw 'został wpis w rejestrze' }
+          if (-not (Test-Path $data)) { throw 'deinstalator usunął dane użytkownika!' }
+          'Deinstalacja OK, dane użytkownika zachowane.'
+
+  tests-windows:
+    name: Testy (pytest) na Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest -q -p no:cacheprovider
+
+  release:
+    name: Wydanie (Releases)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test-windows, tests-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MatrixFinance-Setup
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: MatrixFinance-Setup-*

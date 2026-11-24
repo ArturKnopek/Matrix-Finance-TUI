@@ -36,9 +36,7 @@ from src.utils.crypto_utils import decrypt_file
 BACKUP_FILENAME = "Matrix_Backup.matrix"
 
 
-def documents_dir() -> Path:
-    docs = Path.home() / "Documents"
-    return docs if docs.exists() else Path.home()
+from src.utils.paths import documents_dir  # noqa: E402
 
 
 def password_input(widget_id: str, placeholder: str) -> Input:

@@ -1,0 +1,64 @@
+MATRIX FINANCE {VERSION} — INSTRUKCJA (Windows)
+================================================
+
+Matrix Finance to program do prowadzenia budżetu domowego połączonego
+z oszczędzaniem kopertowym: koperty z przenoszeniem reszty, konta, lokaty,
+obligacje, IKE/IKZE/PPK, cele, auto-oszczędzanie, raporty i szyfrowanie danych.
+
+
+URUCHAMIANIE
+------------
+* Skrót „Matrix Finance” na pulpicie lub w menu Start.
+* Program działa w oknie terminala. Jeśli masz Windows Terminal
+  (standard w Windows 11; w Windows 10 — darmowy w Sklepie Microsoft),
+  program otworzy się w nim automatycznie — wygląda wtedy najlepiej.
+* Pierwsze uruchomienie: utwórz użytkownika i hasło.
+* F1 — pomoc i wszystkie skróty klawiszowe.
+* Okno można dowolnie powiększać — układ dopasowuje się sam
+  (Alt+Enter w Windows Terminal = pełny ekran).
+
+
+NAJWAŻNIEJSZE SKRÓTY
+--------------------
+  1 – 9        zakładki (Pulpit, Transakcje, Koperty, Konta, Cele, Automaty,
+               Kalendarz, Raporty, Ustawienia)
+  Ctrl+N       nowa transakcja / nowy element
+  Ctrl+T       przelew między kontami
+  + / -        wpłata / wypłata (Konta, Cele)
+  K            korekta: saldo konta · stan koperty · stan celu
+  M            Koperty: przesuń środki do innej koperty
+  [ / ]        poprzedni / następny miesiąc
+  Ctrl+F       szukaj wszędzie
+  Ctrl+Q       wyjście
+
+
+GDZIE SĄ MOJE DANE
+------------------
+* Dane:     %USERPROFILE%\.matrix_finance   (skrót „Folder z danymi” w menu Start)
+* Eksporty i raporty: Dokumenty\Matrix_Finance
+* Kopia zapasowa: Ustawienia (9) → Eksportuj dane. Dane można zaszyfrować:
+  Ustawienia → Bezpieczeństwo → Włącz szyfrowanie.
+* Aktualizacja programu (nowy instalator) i odinstalowanie NIE usuwają danych
+  (deinstalator osobno pyta, czy je skasować — domyślnie NIE).
+
+
+PROGRAM
+-------
+* Zainstalowany w: %LOCALAPPDATA%\Programs\MatrixFinance
+  (z wbudowanym Pythonem {PYVER} — nie zmienia niczego w systemie
+  i nie wymaga uprawnień administratora).
+* Odinstalowanie: Ustawienia Windows → Aplikacje → Matrix Finance → Odinstaluj
+  albo menu Start → Matrix Finance → Odinstaluj.
+
+
+GDY COŚ NIE DZIAŁA
+------------------
+* Menu Start → Matrix Finance → „Sprawdź instalację” — test działania programu
+  na danych tymczasowych (Twoich danych nie dotyka). Na końcu powinno być
+  „WYNIK: WSZYSTKO DZIAŁA”.
+* Dziennik błędów: %USERPROFILE%\.matrix_finance\matrix.log
+* Dziwne znaki zamiast ramek w zwykłym oknie konsoli: zainstaluj Windows Terminal
+  albo w oknie konsoli wybierz czcionkę „Cascadia Mono” / „Consolas”.
+* Ostrzeżenie „System Windows ochronił ten komputer” przy instalacji:
+  instalator nie ma płatnego podpisu cyfrowego — kliknij „Więcej informacji”
+  → „Uruchom mimo to”.
