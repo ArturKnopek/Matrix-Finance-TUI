@@ -13,7 +13,7 @@ Pobierz **`MatrixFinance-Setup-<wersja>.exe`** (poniżej, w sekcji *Assets*) i u
 
 Wymagania: Windows 10 lub 11, 64-bit. Instalacja cicha: `MatrixFinance-Setup-<wersja>.exe /S`.
 
-**Nowość w 2.2:** synchronizacja z aplikacją na Androida przez OneDrive (Ustawienia → Synchronizacja z telefonem, `Ctrl+Y`).
+**Nowości:** kredyty i zakupy na raty (Konta → Ctrl+N → Zobowiązania; raty księgują się same), własny rodzaj konta, tryb stanów początkowych bez historii (Ustawienia), poprawiona zmiana motywu kolorów; synchronizacja z aplikacją na Androida przez OneDrive (Ustawienia → Synchronizacja z telefonem, `Ctrl+Y`).
 Aplikacja na telefon: repozytorium Matrix-Finance-Mobile.
 
 Inne systemy (Linux, macOS) i uruchamianie ze źródeł — zobacz README.
