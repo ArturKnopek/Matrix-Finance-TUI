@@ -177,6 +177,20 @@ def test_strict_checks_on_phone(devices):
         sync.record_op("nieznana", {})
 
 
+def test_ops_file_uploaded_one_level_up_is_found(devices):
+    d = devices
+    sync.sync_folder_now(d.folder)
+    _phone_pull(d)
+    sync.record_op("tx.add", {"uid": sync.new_uid("tx"), "date": f"{YM}-11", "type": "Wydatek",
+                              "category": "Jedzenie", "account": "Karta", "shop": "Żabka", "amount": 7, "desc": ""})
+    d.use("phone")
+    (d.folder.parent / "telefon-abc123 (1).mfops").write_bytes(sync.build_ops_file(PASSWORD))
+    d.use("pc")
+    result = sync.sync_folder_now(d.folder)
+    assert len(result.applied) == 1
+    assert not list(d.folder.parent.glob("*.mfops"))  # przeniesiony do „przetworzone”
+
+
 def test_snapshot_only_when_changed(devices):
     d = devices
     first = sync.sync_folder_now(d.folder, only_if_changed=True)

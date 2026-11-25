@@ -412,7 +412,7 @@ def sync_folder_now(folder: Optional[Path] = None, password: Optional[str] = Non
     folder.mkdir(parents=True, exist_ok=True)
     result = SyncResult(folder=folder)
     processed = folder / PROCESSED_DIR
-    for path in sorted(folder.glob(f"*{OPS_SUFFIX}"), key=lambda p: p.stat().st_mtime):
+    for path in _ops_files(folder):
         try:
             payload = _decrypt_json(path.read_bytes(), password, OPS_FORMAT)
         except (SyncError, OSError) as e:
@@ -441,6 +441,16 @@ def sync_folder_now(folder: Optional[Path] = None, password: Optional[str] = Non
             set_setting_in(conn, SET_LAST, now_iso())
             set_setting_in(conn, SET_LAST_INFO, result.summary())
     return result
+
+
+def _ops_files(folder: Path) -> List[Path]:
+    """Pliki zmian z telefonu: z folderu synchronizacji oraz — gdyby telefon wysłał plik o poziom wyżej
+    (np. do głównego folderu OneDrive zamiast do MatrixFinance) — pliki telefon-*.mfops z folderu nadrzędnego."""
+    files = list(folder.glob(f"*{OPS_SUFFIX}"))
+    parent = folder.parent
+    if parent != folder and parent.is_dir():
+        files += [p for p in parent.glob(f"telefon-*{OPS_SUFFIX}") if p.is_file()]
+    return sorted(files, key=lambda p: p.stat().st_mtime)
 
 
 def _trim_processed(processed: Path) -> None:
