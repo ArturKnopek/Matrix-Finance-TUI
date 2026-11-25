@@ -355,6 +355,113 @@ def test_sync_settings_dialog_and_ctrl_y(user_db, tmp_path):
     run(scenario())
 
 
+def test_custom_account_loan_and_existing_deposit_dialogs(user_db):
+    from src.finance import loans
+    from src.ui.forms import EXISTING
+
+    db = user_db
+    future = (date.today() + timedelta(days=10)).isoformat()
+
+    async def fill(app, pilot, values: dict, kind: str) -> None:
+        app.screen.query_one("#f-kind").value = kind
+        await pilot.pause(0.2)
+        for wid, val in values.items():
+            app.screen.query_one(f"#{wid}").value = val
+        await pilot.pause(0.2)
+        await pilot.press("ctrl+s")
+        await pilot.pause(0.4)
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_dashboard(app, pilot, db)
+            await pilot.press("4")
+            await pilot.pause(0.3)
+            # własny rodzaj
+            await pilot.press("ctrl+n")
+            await pilot.pause(0.3)
+            assert not app.screen.query_one("#row-custom-label").display
+            await fill(app, pilot, {"f-name": "Obligacje co miesiąc", "f-custom-label": "Obligacje skarbowe",
+                                    "f-custom-group": "Inwestycje", "f-flag-valuation": True}, "custom")
+            assert _dialog_name(app) == "MainDashboard"
+            # zakup na raty
+            await pilot.press("ctrl+n")
+            await pilot.pause(0.3)
+            await fill(app, pilot, {"f-name": "Ekspres", "f-loan-amount": "1500", "f-loan-count": "10",
+                                    "f-loan-due": future, "f-loan-cat": "Raty"}, "installments")
+            assert _dialog_name(app) == "MainDashboard"
+            # lokata już założona (bez przelewu)
+            await pilot.press("ctrl+n")
+            await pilot.pause(0.3)
+            app.screen.query_one("#f-kind").value = "deposit"
+            await pilot.pause(0.2)
+            app.screen.query_one("#f-source").value = EXISTING
+            await pilot.pause(0.2)
+            assert app.screen.query_one("#row-return").display
+            await fill(app, pilot, {"f-name": "Lokata stara", "f-principal": "2000", "f-term": "12",
+                                    "f-start": "01.06.2026"}, "deposit")
+            assert _dialog_name(app) == "MainDashboard"
+            table = app.screen.query_one("#acc-table", SmartTable)
+            table.select_id("Ekspres")
+            await pilot.pause(0.2)
+            assert "następna rata" in str(app.screen.query_one("#acc-detail").render())
+            await pilot.press("minus")  # wypłata z kredytu — zablokowana
+            await pilot.pause(0.3)
+            assert _dialog_name(app) == "MainDashboard"
+
+    run(scenario())
+    from src.finance import accounts, ledger
+
+    info = accounts.account_info(accounts.get_account("Obligacje co miesiąc"))
+    assert info.label == "Obligacje skarbowe" and info.valuation and not info.liquid
+    st = loans.loan_status(accounts.get_account("Ekspres"))
+    assert st["remaining"] == 1500 and st["payment"] == 150 and st["installments"] == 10
+    assert accounts.get_account_balance("Lokata stara") == 2000
+    assert not any(t["account_type"] == "Lokata stara" for t in ledger.fetch_transactions())
+    assert db.get_account_balance("Karta") == 1000  # nic nie przelano
+
+
+def test_opening_mode_settings_and_dialog(user_db):
+    from src.finance import accounts, ledger
+
+    db = user_db
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_dashboard(app, pilot, db)
+            await pilot.press("9")
+            await pilot.pause(0.3)
+            app.screen.query_one("#chk-opening").value = True
+            await pilot.pause(0.3)
+            assert accounts.opening_mode()
+            assert "STAN POCZĄTKOWY" in str(app.screen.query_one("#header-title").render())
+            app.screen.query_one("#btn-opening").press()
+            await pilot.pause(0.4)
+            assert _dialog_name(app) == "OpeningBalancesDialog"
+            app.screen.query_one("#ob-acc-0").value = "2500"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.4)
+            assert _dialog_name(app) == "MainDashboard"
+            # korekta K w trybie stanu początkowego: domyślnie bez wpisu
+            await pilot.press("4")
+            await pilot.pause(0.3)
+            app.screen.query_one("#acc-table", SmartTable).select_id("Gotówka")
+            await pilot.press("k")
+            await pilot.pause(0.3)
+            assert app.screen.query_one("#f-no-history").value is True
+            app.screen.query_one("#f-amount").value = "321"
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.4)
+
+    run(scenario())
+    accounts.set_opening_mode(False)
+    first = accounts.get_accounts_overview()[0]["name"]
+    assert db.get_account_balance(first) == 2500
+    assert db.get_account_balance("Gotówka") == 321
+    assert ledger.fetch_transactions() == []
+
+
 def test_welcome_timer_after_leaving_screen(user_db):
     """Regresja (Windows): timer mrugania przycisku działał po zamknięciu ekranu powitalnego."""
     db = user_db

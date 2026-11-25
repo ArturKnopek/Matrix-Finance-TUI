@@ -1,4 +1,4 @@
 """Wersja aplikacji (jedno źródło prawdy: interfejs, instalator Windows, --version)."""
 
 APP_NAME = "Matrix Finance"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"

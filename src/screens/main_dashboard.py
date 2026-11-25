@@ -223,7 +223,15 @@ class MainDashboard(Screen):
         p = palette()
         view = self._current_view()
         title = next((cls.TITLE for v, cls, _ in MENU if v == view), "")
-        self.query_one("#header-title", Label).update(Text(f"› {title}", style=f"bold {p.accent}"))
+        header = Text(f"› {title}", style=f"bold {p.accent}")
+        try:
+            from src.finance.accounts import opening_mode
+
+            if opening_mode():  # przypomnienie: zmiany sald bez historii
+                header.append("  ⚑ STAN POCZĄTKOWY", style=f"bold {p.on_accent} on {p.warning}")
+        except Exception:
+            pass
+        self.query_one("#header-title", Label).update(header)
         y, m = map(int, get_active_month_str().split("-"))
         month = f"{MONTHS_PL[m - 1]} {y}" if self.size.width >= 110 else f"{m:02d}.{y}"
         self.query_one("#header-month", Label).update(Text(month, style=f"bold {p.text}"))

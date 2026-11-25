@@ -82,7 +82,15 @@ class AccountsView(ViewMixin, Vertical):
         if not row:
             label.update("")
             return
-        info = acc_api.kind_info(row["account_kind"])
+        info = acc_api.account_info(row)
+        if info.liability:
+            from src.finance.loans import loan_status
+
+            st = loan_status(row)
+            when = f"następna rata {st['next_due']:%d.%m.%Y}" if st["next_due"] else "spłacony ✓"
+            label.update(f"{row['name']}: {when} · rata {money(st['payment'])} · + nadpłata · K ile zostało · "
+                         f"^E zmień ratę/termin · ^D zamknij (po spłacie)")
+            return
         ops = ["+ wpłata", "- wypłata", "^T przelew"]
         if info.valuation:
             ops.append("W wycena")
@@ -116,8 +124,13 @@ class AccountsView(ViewMixin, Vertical):
         row = self._selected()
         if not row:
             return self.warn_select("konto")
-        if acc_api.kind_info(row["account_kind"]).has_term and operation not in ("close", "correction"):
+        info = acc_api.account_info(row)
+        if info.has_term and operation not in ("close", "correction"):
             self.notify("Lokata/obligacje: środki wrócą automatycznie po terminie; ^D — zerwanie.",
+                        severity="warning")
+            return
+        if info.liability and operation not in ("deposit", "correction", "close"):
+            self.notify("Kredyt / raty: + nadpłata, K — ile zostało do spłaty; raty księgują się same.",
                         severity="warning")
             return
         self.open_dialog(AccountOperationDialog(row["name"], operation))
@@ -135,7 +148,7 @@ class AccountsView(ViewMixin, Vertical):
         row = self._selected()
         if not row:
             return self.warn_select("konto")
-        info = acc_api.kind_info(row["account_kind"])
+        info = acc_api.account_info(row)
         self._op("valuation" if info.valuation else "interest")
 
     def do_correction(self) -> None:
@@ -157,7 +170,7 @@ class AccountsView(ViewMixin, Vertical):
         row = self._selected()
         if not row:
             return self.warn_select("konto")
-        if acc_api.kind_info(row["account_kind"]).has_term:
+        if acc_api.account_info(row).has_term:
             name = row["name"]
 
             def do_break() -> str:
@@ -182,7 +195,16 @@ class AccountsView(ViewMixin, Vertical):
                 rate = float(a.get("interest_rate") or 0)
                 progress, progress_label, details = None, "", ""
                 proj = a.get("projection")
-                if proj:
+                loan = a.get("loan")
+                if loan:
+                    progress = loan["progress"]
+                    if loan["finished"]:
+                        details = "spłacony ✓"
+                    else:
+                        count = f"{loan['paid']}/{loan['installments']} · " if loan["installments"] else ""
+                        nxt = f" · nast. {loan['next_due']:%d.%m}" if loan["next_due"] else ""
+                        details = f"{count}rata {loan['payment']:.2f}{nxt}"
+                elif proj:
                     progress = proj["progress"]
                     details = f"do {proj['end']:%d.%m.%Y} · +{proj['net_interest']:.2f} netto"
                 elif info.retirement and float(a.get("yearly_limit") or 0) > 0:
@@ -210,9 +232,10 @@ class AccountsView(ViewMixin, Vertical):
 
         nw = acc_api.get_net_worth()
         stats = Text()
-        placed = nw["total"] - nw["liquid"] - nw["goals"]
+        placed = nw["total"] - nw["liquid"] - nw["goals"] + nw.get("debt", 0.0)
         for key, label, value in (("liquid", "dostępne", nw["liquid"]), ("placed", "ulokowane", placed),
-                                  ("goals", "cele", nw["goals"]), ("total", "RAZEM", nw["total"])):
+                                  ("goals", "cele", nw["goals"]), ("debt", "długi", -nw.get("debt", 0.0)),
+                                  ("total", "RAZEM", nw["total"])):
             if key != "total" and not value:
                 continue
             stats.append(f" {label} ", style=p.muted)

@@ -17,10 +17,14 @@ Matrix Finance to kompleksowe narzędzie do prowadzenia **budżetu domowego poł
 | Oszczędności | konto oszczędnościowe (z oprocentowaniem), **lokata** |
 | Inwestycje | **obligacje skarbowe**, konto maklerskie, **robodoradca** |
 | Emerytalne | **IKE, IKZE, PPK** (z limitem rocznych wpłat) |
+| Zobowiązania | **kredyt / pożyczka**, **zakup na raty** (saldo ujemne = dług) |
+| Własny rodzaj | **dowolny** — nazwa rodzaju, grupa i właściwości ustawiane ręcznie |
 
 * **Przelewy między kontami** (`Ctrl+T` z każdego miejsca) — nie są ani wydatkiem, ani dochodem, więc nie zaburzają budżetu.
 * **Lokaty i obligacje** — zakładane z dowolnego konta (np. z Revoluta), z oprocentowaniem, okresem i podatkiem Belki (19%). Postęp okresu i prognoza zysku netto; po terminie odsetki dopisują się automatycznie, a środki wracają na konto źródłowe albo lokata odnawia się z kapitalizacją. Można ją też zerwać (zwrot kapitału bez odsetek).
 * **Inwestycje** — wpłaty/wypłaty, ręczna aktualizacja wyceny (zysk/strata), wpłaty zewnętrzne (np. pracodawca do PPK), dopisywanie odsetek.
+* **Własny rodzaj konta** (Konta → `Ctrl+N` → *Własny rodzaj*) — zamiast gotowca: nazwa rodzaju (np. „Obligacje co miesiąc”), grupa (Codzienne / Oszczędności / Inwestycje / Emerytalne / Zobowiązania) i przełączniki: środki dostępne na co dzień, oprocentowanie, wycena ręczna (`W`), roczny limit wpłat. Np. obligacje kupowane co miesiąc: wycena ręczna + zlecenie stałe „Przelew” 100 zł.
+* **Kredyty i raty** (Konta → `Ctrl+N` → *Zobowiązania*): kwota, liczba rat, oprocentowanie (raty 0% — puste), rata wyliczana sama (albo wpisana), najbliższa rata, konto spłaty i koperta rat. Raty księgują się same (także zaległe): **wydatek w kopercie** (budżet widzi ratę) + **spłata kapitału** na koncie kredytu (odsetki liczone od pozostałego długu); po spłacie spłata się kończy. `+` = nadpłata (kredyt kończy się szybciej), `K` = ile zostało do spłaty, `Ctrl+E` = zmiana raty / terminu. Raty widać w „Nadchodzących płatnościach”, a dług — w majątku („długi”). Kredyt gotówkowy może wpłynąć na wybrane konto (to nie dochód).
 * **Korekta salda** (`K`) dla każdego konta — także oszczędnościowego, lokaty i inwestycji: wpisujesz rzeczywiste saldo z banku, a różnica zapisuje się w historii jako „Korekta salda (+/−)” (nie jest wydatkiem ani dochodem).
 * **Majątek netto** z podziałem na grupy, środki dostępne i ulokowane.
 
@@ -46,6 +50,9 @@ Aplikacja na Androida — osobny projekt **[Matrix Finance Mobile](https://githu
 * oba pliki są szyfrowane hasłem synchronizacji (AES/Fernet, PBKDF2).
 
 Konfiguracja: *Ustawienia (9) → Synchronizacja z telefonem → Ustaw synchronizację* (folder OneDrive wykrywany automatycznie, hasło).
+
+### Stan początkowy (przy zakładaniu programu)
+*Ustawienia → Stan początkowy*: **tryb stanów początkowych** — korekty sald (`K`), istniejące lokaty („lokata już założona — bez przelewu”) i trwające kredyty zapisują się **bez wpisów w historii** i bez wpływu na budżet (w nagłówku widać „⚑ STAN POCZĄTKOWY”). Przycisk *Ustaw salda kont i celów* — wszystkie salda i stany celów w jednym oknie.
 
 ### Dane i bezpieczeństwo
 * **Eksport**: pełny JSON, pełny eksport **zaszyfrowany** hasłem (.mfx), transakcje CSV (Excel), kopia całej bazy (.matrix).

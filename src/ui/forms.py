@@ -194,7 +194,18 @@ class TransferDialog(FormDialog):
 # Konto (nowe / edycja) — pola zależne od rodzaju
 # =============================================================================
 
+EXISTING = "__existing__"  # lokata już założona (bez przelewu)
+NO_FUNDS = "__none__"  # zakup na raty — pieniądze nie wpłynęły na żadne konto
+
+
 class AccountDialog(FormDialog):
+    """
+    Nowe konto / edycja. Pola zależą od rodzaju:
+      * własny rodzaj — nazwa rodzaju, grupa i przełączniki właściwości,
+      * lokata / obligacje — kwota, okres, z jakiego konta (albo „już założona” — bez przelewu),
+      * kredyt / zakup na raty — kwota, liczba rat, oprocentowanie, rata, termin, konto spłaty, koperta.
+    """
+
     WIDE = True
 
     def __init__(self, name: Optional[str] = None, preset_kind: str = "checking") -> None:
@@ -202,30 +213,76 @@ class AccountDialog(FormDialog):
         super().__init__(f"EDYCJA KONTA: {name}" if name else "NOWE KONTO / PRODUKT")
         self.preset_kind = preset_kind
 
+    # ------------------------------------------------------------------ pola
+
     def compose_body(self) -> Iterable[Widget]:
         r = self.row or {}
         kind = r.get("account_kind") or self.preset_kind
+        locked = bool(self.row and (acc_api.kind_info(kind).has_term or kind in acc_api.LOAN_KINDS))
         yield form_row("Rodzaj:", Select(acc_api.kind_options(), value=kind, id="f-kind", allow_blank=False,
-                                         classes="row-select", disabled=bool(self.row and acc_api.kind_info(kind).has_term)))
-        yield form_row("Nazwa:", text_input("f-name", "np. Revolut, Lokata 6M, IKE ETF", r.get("name") or ""))
+                                         classes="row-select", disabled=locked))
+        yield form_row("Nazwa:", text_input("f-name", "np. Revolut, Lokata 6M, Ekspres na raty", r.get("name") or ""))
         yield form_row("Instytucja:", text_input("f-institution", "np. Revolut, PKO BP, XTB", r.get("institution") or "",
                                                  suggester=SuggestFromList(acc_api.INSTITUTIONS, case_sensitive=False)))
+        # --- własny rodzaj ---
+        flags = acc_api.parse_flags(r.get("custom_flags")) if r else {"valuation"}
+        yield form_row("Nazwa rodzaju:", text_input("f-custom-label", "np. Obligacje co miesiąc, Konto walutowe",
+                                                    r.get("custom_label") or ""), row_id="row-custom-label")
+        yield form_row("Grupa:", Select([(g, g) for g in acc_api.KIND_GROUPS], value=r.get("custom_group") or
+                                        "Inwestycje", id="f-custom-group", allow_blank=False, classes="row-select"),
+                       row_id="row-custom-group")
+        for flag, label in acc_api.CUSTOM_FLAGS.items():
+            yield form_row("", Checkbox(label, id=f"f-flag-{flag}", value=flag in flags), row_id=f"row-flag-{flag}",
+                           classes="checkbox-row")
         if not self.row:
             yield form_row("Saldo początkowe:", amount_input("f-opening", "0,00"), row_id="row-opening")
         # --- lokaty / obligacje ---
-        yield form_row("Z konta:", account_select("f-source", liquid_only=True), row_id="row-source")
-        yield form_row("Kwota lokaty:", amount_input("f-principal", "kwota przelewana z konta"), row_id="row-principal")
+        sources = acc_api.get_account_options(liquid_only=True, with_balance=True)
+        yield form_row("Z konta:", Select(sources + [("— lokata już założona (bez przelewu)", EXISTING)],
+                                          value=EXISTING if acc_api.opening_mode() else sources[0][1],
+                                          id="f-source", allow_blank=False, classes="row-select"), row_id="row-source")
+        yield form_row("Po terminie na:", account_select("f-return", liquid_only=True), row_id="row-return")
+        yield form_row("Kwota lokaty:", amount_input("f-principal", "kapitał lokaty / obligacji"), row_id="row-principal")
         yield form_row("Okres (mies.):", text_input("f-term", "np. 3, 6, 12", str(r.get("term_months") or ""),
                                                     restrict=r"^[0-9]*$"), row_id="row-term")
         yield form_row("Data założenia:", text_input("f-start", DATE_HINT), row_id="row-start")
         yield form_row("", Checkbox("Odnawiaj automatycznie (kapitalizacja odsetek)", id="f-renew",
                                     value=bool(r.get("auto_renew"))), row_id="row-renew", classes="checkbox-row")
+        # --- kredyt / raty ---
+        yield form_row("Kwota do spłaty:", amount_input("f-loan-amount", "cena na raty / kwota kredytu (lub ile zostało)"),
+                       row_id="row-loan-amount")
+        yield form_row("Liczba rat:", text_input("f-loan-count", "np. 10, 24, 360 (pozostałe)",
+                                                str(r.get("term_months") or ""), restrict=r"^[0-9]*$"),
+                       row_id="row-loan-count")
+        yield form_row("Rata miesięczna:", amount_input("f-loan-payment", "puste = wylicz (rata równa)",
+                                                        f"{float(r.get('loan_installment') or 0):.2f}" if r and
+                                                        r.get("loan_installment") else ""), row_id="row-loan-payment")
+        next_due = ""
+        if r.get("loan_first_due"):
+            from src.finance.loans import loan_status
+
+            nd = loan_status(r).get("next_due")
+            next_due = nd.isoformat() if nd else ""
+        yield form_row("Najbliższa rata:", text_input("f-loan-due", "data, np. 05.12.2026", next_due),
+                       row_id="row-loan-due")
+        yield form_row("Spłacane z konta:", account_select("f-loan-from", liquid_only=True,
+                                                            current=r.get("linked_account")), row_id="row-loan-from")
+        cats = [c for c in env_api.get_unique_categories()]
+        default_cat = r.get("loan_category") or ("Raty i kredyty" if "Raty i kredyty" not in cats else "Raty i kredyty")
+        yield form_row("Koperta rat:", text_input("f-loan-cat", "np. Raty i kredyty", default_cat,
+                                                  suggester=SuggestFromList(cats, case_sensitive=False)),
+                       row_id="row-loan-cat")
+        yield form_row("Pieniądze na:", Select([("— nie (zakup na raty)", NO_FUNDS)] + sources, value=NO_FUNDS,
+                                               id="f-loan-funds", allow_blank=False, classes="row-select"),
+                       row_id="row-loan-funds")
+        yield form_row("", Checkbox("Kredyt już trwa — bez wpisów w historii (stan początkowy)", id="f-loan-opening",
+                                    value=acc_api.opening_mode()), row_id="row-loan-opening", classes="checkbox-row")
         # --- oprocentowanie / limity ---
-        yield form_row("Oprocentowanie %:", amount_input("f-rate", "np. 5,5",
+        yield form_row("Oprocentowanie %:", amount_input("f-rate", "np. 5,5 (raty 0% — zostaw puste)",
                                                          f"{float(r.get('interest_rate') or 0):g}" if r else ""),
                        row_id="row-rate")
         yield form_row("Podatek %:", amount_input("f-tax", "19 (podatek Belki)",
-                                                           f"{float(r.get('tax_rate') if r.get('tax_rate') is not None else 19):g}"),
+                                                  f"{float(r.get('tax_rate') if r.get('tax_rate') is not None else 19):g}"),
                        row_id="row-tax")
         yield form_row("Limit wpłat / rok:", amount_input("f-limit", "np. limit IKE/IKZE",
                                                           f"{float(r.get('yearly_limit') or 0):g}" if r else ""),
@@ -240,26 +297,52 @@ class AccountDialog(FormDialog):
         self.query_one("#f-name").focus()
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "f-kind":
+        if event.select.id in ("f-kind", "f-source", "f-custom-group"):
             self._apply_kind()
         self._update_preview()
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if (event.checkbox.id or "").startswith("f-flag-"):
+            self._apply_kind()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self._update_preview()
 
+    # ------------------------------------------------------------------ właściwości wg formularza
+
+    def _flags(self) -> str:
+        return ",".join(f for f in acc_api.CUSTOM_FLAGS if self.value(f"f-flag-{f}"))
+
+    def _info(self) -> Any:
+        kind = self.value("f-kind")
+        if kind == "custom":
+            return acc_api.custom_kind(self.value("f-custom-label"), self.value("f-custom-group"), self._flags())
+        return acc_api.kind_info(kind)
+
     def _apply_kind(self) -> None:
-        info = acc_api.kind_info(self.value("f-kind"))
+        kind = self.value("f-kind")
+        info = self._info()
+        custom = kind == "custom"
+        loan = kind in acc_api.LOAN_KINDS
         new_term = info.has_term and not self.row
+        existing = self.value("f-source") == EXISTING
+        for row in ("row-custom-label", "row-custom-group", *[f"row-flag-{f}" for f in acc_api.CUSTOM_FLAGS]):
+            self.toggle_row(row, custom)
         self.toggle_row("row-source", new_term)
+        self.toggle_row("row-return", new_term and existing)
         self.toggle_row("row-principal", new_term)
         self.toggle_row("row-start", new_term)
         self.toggle_row("row-term", new_term)
         self.toggle_row("row-renew", info.has_term)
+        for row in ("row-loan-count", "row-loan-payment", "row-loan-due", "row-loan-from", "row-loan-cat"):
+            self.toggle_row(row, loan)
+        for row in ("row-loan-amount", "row-loan-funds", "row-loan-opening"):
+            self.toggle_row(row, loan and not self.row)
         self.toggle_row("row-rate", info.has_rate)
-        self.toggle_row("row-tax", info.has_rate)
+        self.toggle_row("row-tax", info.has_rate and not loan)
         self.toggle_row("row-limit", info.retirement)
         if not self.row:
-            self.toggle_row("row-opening", not info.has_term)
+            self.toggle_row("row-opening", not info.has_term and not loan)
         self._update_preview()
 
     def _update_preview(self) -> None:
@@ -267,9 +350,23 @@ class AccountDialog(FormDialog):
             label = self.query_one("#f-preview", Label)
         except Exception:
             return
-        info = acc_api.kind_info(self.value("f-kind"))
+        from src.finance.loans import annuity_payment
+
+        kind = self.value("f-kind")
+        info = self._info()
         rate = parse_amount(self.value("f-rate") or "") or 0.0
         tax = parse_amount(self.value("f-tax") or "") or 0.0
+        if kind in acc_api.LOAN_KINDS:
+            amount = parse_amount(self.value("f-loan-amount") or "") or (-float(self.row["balance"]) if self.row else 0)
+            count = int(self.value("f-loan-count") or 0)
+            if amount and count:
+                payment = parse_amount(self.value("f-loan-payment") or "") or annuity_payment(amount, rate, count)
+                total = payment * count
+                label.update(f"rata {money(payment)} × {count} = {money(total)}"
+                             + (f" · odsetki ≈ {money(max(0.0, total - amount))}" if rate else " · bez odsetek"))
+            else:
+                label.update("podaj kwotę i liczbę rat — ratę wyliczę sam (możesz ją wpisać ręcznie)")
+            return
         if info.has_term and not self.row:
             principal = parse_amount(self.value("f-principal") or "") or 0.0
             months = int(self.value("f-term") or 0)
@@ -280,32 +377,49 @@ class AccountDialog(FormDialog):
                 label.update(f"zysk netto ≈ {money(net)} (brutto {gross:.2f}, podatek {tax_amt:.2f})")
                 return
         elif info.has_rate and rate:
-            base = float((self.row or {}).get("balance") or parse_amount(self.value("f-opening") or "") or 0.0) \
-                if self.row else (parse_amount(self.value("f-opening") or "") or 0.0)
+            base = float((self.row or {}).get("balance") or 0.0) if self.row else \
+                (parse_amount(self.value("f-opening") or "") or 0.0)
             label.update(f"odsetki netto ≈ {money(base * rate / 100 / 12 * (1 - tax / 100))} / mies.")
             return
-        label.update(info.group + " · " + ("środki dostępne od ręki" if info.liquid else "środki ulokowane"))
+        parts = [info.group, "środki dostępne od ręki" if info.liquid else "środki ulokowane"]
+        if info.valuation:
+            parts.append("wycena ręczna (W)")
+        label.update(" · ".join(parts))
+
+    # ------------------------------------------------------------------ zapis
 
     def submit_form(self) -> Any:
         name = self.value("f-name")
         if not name:
             raise FormError("Podaj nazwę konta.", "f-name")
         kind = self.value("f-kind")
-        info = acc_api.kind_info(kind)
+        info = self._info()
         rate = parse_amount(self.value("f-rate") or "0") or 0.0
         tax = parse_amount(self.value("f-tax") or "19")
         tax = 19.0 if tax is None else tax
         limit = parse_amount(self.value("f-limit") or "0") or 0.0
         institution = self.value("f-institution")
+        custom = {}
+        if kind == "custom":
+            if not self.value("f-custom-label"):
+                raise FormError("Podaj nazwę rodzaju (np. Obligacje co miesiąc).", "f-custom-label")
+            custom = {"custom_label": self.value("f-custom-label"), "custom_group": self.value("f-custom-group"),
+                      "custom_flags": self._flags()}
 
         if self.row:
+            extra: dict = dict(custom)
+            if kind in acc_api.LOAN_KINDS:
+                extra.update(self._loan_edit_fields())
             ok, msg = acc_api.update_account(
                 self.row["name"], new_name=name, institution=institution or None, interest_rate=rate, tax_rate=tax,
                 yearly_limit=limit, include_in_net_worth=1 if self.value("f-networth") else 0,
-                auto_renew=1 if self.value("f-renew") else 0, account_kind=kind)
+                auto_renew=1 if self.value("f-renew") else 0, account_kind=kind, **extra)
             if not ok:
                 raise FormError(msg, "f-name")
-            return {"message": f"Zapisano konto {name}."}
+            return {"message": f"Zapisano konto {name}.", "check_due": kind in acc_api.LOAN_KINDS}
+
+        if kind in acc_api.LOAN_KINDS:
+            return self._create_loan(name, kind, rate, institution)
 
         if info.has_term:
             principal = parse_required_amount(self.value("f-principal"), "f-principal")
@@ -313,21 +427,63 @@ class AccountDialog(FormDialog):
             if months <= 0:
                 raise FormError("Podaj okres w miesiącach.", "f-term")
             start = parse_required_date(self.value("f-start"), "f-start")
-            ok, msg = acc_api.open_term_deposit(name, self.value("f-source"), principal, rate, months, start,
-                                                institution, kind, bool(self.value("f-renew")), tax)
+            existing = self.value("f-source") == EXISTING
+            ok, msg = acc_api.open_term_deposit(name, None if existing else self.value("f-source"), principal, rate,
+                                                months, start, institution, kind, bool(self.value("f-renew")), tax,
+                                                return_to=self.value("f-return") if existing else None)
             if not ok:
                 raise FormError(msg)
-            return {"message": f"Założono {info.label.lower()}: {name} ({money(principal)})."}
+            how = " (stan początkowy, bez przelewu)" if existing else ""
+            return {"message": f"Założono {info.label.lower()}: {name} ({money(principal)}){how}.",
+                    "check_due": True}
 
         opening = parse_amount(self.value("f-opening") or "0")
         if opening is None:
             raise FormError("Niepoprawne saldo początkowe.", "f-opening")
         ok, msg = acc_api.add_account(name, opening, account_kind=kind, institution=institution or None,
                                       interest_rate=rate, tax_rate=tax, yearly_limit=limit,
-                                      include_in_net_worth=bool(self.value("f-networth")))
+                                      include_in_net_worth=bool(self.value("f-networth")), **custom)
         if not ok:
             raise FormError(msg, "f-name")
-        return {"message": f"Dodano konto {name}."}
+        return {"message": f"Dodano konto {name} ({info.label})."}
+
+    def _loan_numbers(self) -> tuple:
+        count = int(self.value("f-loan-count") or 0)
+        if count <= 0:
+            raise FormError("Podaj liczbę (pozostałych) rat.", "f-loan-count")
+        due = parse_required_date(self.value("f-loan-due"), "f-loan-due")
+        payment = parse_amount(self.value("f-loan-payment") or "")
+        if self.value("f-loan-payment") and (payment is None or payment <= 0):
+            raise FormError("Niepoprawna rata.", "f-loan-payment")
+        if not self.value("f-loan-from"):
+            raise FormError("Wybierz konto, z którego spłacasz raty.", "f-loan-from")
+        return count, due, payment
+
+    def _create_loan(self, name: str, kind: str, rate: float, institution: Optional[str]) -> Any:
+        from src.finance import loans
+
+        amount = parse_required_amount(self.value("f-loan-amount"), "f-loan-amount")
+        count, due, payment = self._loan_numbers()
+        funds = self.value("f-loan-funds")
+        ok, msg = loans.open_loan(name, amount, count, due, self.value("f-loan-from"), rate, payment, kind,
+                                  self.value("f-loan-cat") or None, None if funds == NO_FUNDS else funds,
+                                  institution or None, record_history=not self.value("f-loan-opening"))
+        if not ok:
+            raise FormError(msg)
+        pay = loans.loan_status(acc_api.get_account(name))["payment"]
+        return {"message": f"Dodano {name}: {money(amount)}, {count} rat po {money(pay)}.", "check_due": True}
+
+    def _loan_edit_fields(self) -> dict:
+        from src.finance import loans
+
+        count, due, payment = self._loan_numbers()
+        paid = loans.loan_status(self.row)["paid"]
+        first = acc_api.add_months(datetime.strptime(due, "%Y-%m-%d").date(), -paid)
+        remaining = -float(self.row["balance"] or 0)
+        return {"term_months": count, "loan_first_due": first.isoformat(), "linked_account": self.value("f-loan-from"),
+                "loan_category": self.value("f-loan-cat") or loans.DEFAULT_CATEGORY,
+                "loan_installment": payment or loans.annuity_payment(remaining, parse_amount(
+                    self.value("f-rate") or "0") or 0.0, max(1, count - paid))}
 
 
 # =============================================================================
@@ -349,13 +505,21 @@ class AccountOperationDialog(FormDialog):
     def __init__(self, account: str, operation: str) -> None:
         self.account = dict(acc_api.get_account(account))
         self.operation = operation
-        super().__init__(f"{ACCOUNT_OPERATIONS[operation]}: {account}", "danger" if operation == "close" else None)
+        self.debt = acc_api.account_info(self.account).liability  # kredyt / raty: saldo ujemne = dług
+        title = "NADPŁATA / SPŁATA" if self.debt and operation == "deposit" else \
+            "KOREKTA: ILE ZOSTAŁO DO SPŁATY" if self.debt and operation == "correction" else ACCOUNT_OPERATIONS[operation]
+        super().__init__(f"{title}: {account}", "danger" if operation == "close" else None)
         self.SAVE_LABEL = "ZATWIERDŹ"
+
+    def _shown(self, balance: float) -> float:
+        """Kwota w formularzu: dla zobowiązań — dług (dodatni), dla reszty — saldo."""
+        return -balance if self.debt else balance
 
     def compose_body(self) -> Iterable[Widget]:
         a = self.account
-        info = acc_api.kind_info(a["account_kind"])
-        yield form_row("Saldo / wartość:", info_line("f-current", money(float(a["balance"] or 0))))
+        info = acc_api.account_info(a)
+        balance = float(a["balance"] or 0)
+        yield form_row("Do spłaty:" if self.debt else "Saldo / wartość:", info_line("f-current", money(self._shown(balance))))
         op = self.operation
         if op in ("deposit", "withdraw"):
             others = [(lbl, v) for lbl, v in acc_api.get_account_options(with_balance=True) if v != a["name"]]
@@ -365,9 +529,11 @@ class AccountOperationDialog(FormDialog):
         if op == "valuation":
             yield form_row("Nowa wartość:", amount_input("f-amount", "aktualna wycena portfela"))
         elif op == "correction":
-            yield form_row("Rzeczywiste saldo:", amount_input("f-amount", "np. stan z aplikacji banku",
-                                                              f"{float(a['balance'] or 0):.2f}"))
+            yield form_row("Zostało do spłaty:" if self.debt else "Rzeczywiste saldo:",
+                           amount_input("f-amount", "np. stan z aplikacji banku", f"{self._shown(balance):.2f}"))
             yield form_row("Różnica:", info_line("f-diff", "—"))
+            yield form_row("", Checkbox("Bez wpisu w historii (stan początkowy)", id="f-no-history",
+                                        value=acc_api.opening_mode()), classes="checkbox-row")
         elif op == "close":
             others = [(lbl, v) for lbl, v in acc_api.get_account_options(with_balance=True) if v != a["name"]]
             yield form_row("Przelej resztę na:", Select(others, value=others[0][1] if others else Select.BLANK,
@@ -387,8 +553,11 @@ class AccountOperationDialog(FormDialog):
             "valuation": "Różnica zostanie zapisana jako wzrost/spadek wyceny (nie wpływa na budżet).",
             "interest": "Odsetki zapisują się jako dochód w kopercie „Odsetki i zyski”.",
             "correction": "Wpisz saldo zgodne z bankiem / portfelem. Różnica zapisze się w historii jako "
-                          "„Korekta salda” — nie jest wydatkiem ani dochodem, więc nie zmienia budżetu.",
+                          "„Korekta salda” — nie jest wydatkiem ani dochodem, więc nie zmienia budżetu. "
+                          "„Bez wpisu w historii” — tylko ustawia stan (np. przy zakładaniu programu).",
         }
+        if self.debt and op == "deposit":
+            hints["deposit"] = "Nadpłata zmniejsza dług — kolejne raty spłacą resztę szybciej (kończą się same)."
         if op in hints:
             yield Label(hints[op], classes="dialog-note")
 
@@ -411,9 +580,9 @@ class AccountOperationDialog(FormDialog):
         if value is None:
             label.update(Text("niepoprawna kwota", style=p.negative))
             return
-        diff = round(value - float(self.account["balance"] or 0), 2)
-        style = p.positive if diff > 0 else p.negative if diff < 0 else p.muted
-        label.update(Text(money(diff, signed=True) if diff else "bez zmian", style=style))
+        diff = round(value - self._shown(float(self.account["balance"] or 0)), 2)
+        style = p.positive if (diff > 0) != self.debt else p.negative
+        label.update(Text(money(diff, signed=True) if diff else "bez zmian", style=style if diff else p.muted))
 
     def submit_form(self) -> Any:
         name = self.account["name"]
@@ -433,9 +602,14 @@ class AccountOperationDialog(FormDialog):
             value = parse_amount(self.value("f-amount") or "")
             if value is None:
                 raise FormError("Podaj poprawne saldo (może być ujemne, np. -120,50).", "f-amount")
-            diff = acc_api.set_account_balance(name, value, note or "Korekta salda", day)
+            if self.debt:
+                value = -abs(value)  # dług zapisujemy jako saldo ujemne
+            diff = acc_api.set_account_balance(name, value, note or "Korekta salda", day,
+                                               record=not self.value("f-no-history"))
             if not diff:
                 return {"message": f"Saldo {name} bez zmian."}
+            if self.debt:
+                return {"message": f"{name}: do spłaty {money(-value)}."}
             return {"message": f"Korekta salda {name}: {money(diff, signed=True)} → {money(value)}."}
         amount = parse_required_amount(self.value("f-amount"), "f-amount")
         if op == "deposit":

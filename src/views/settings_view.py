@@ -60,6 +60,11 @@ class SettingsView(ViewMixin, VerticalScroll):
         yield form_row("Klucz YubiKey:", Label("", id="set-yk-status", classes="row-value"))
         yield form_row("", Button("", id="btn-yubikey", classes="btn-inline"))
 
+        yield Label("STAN POCZĄTKOWY (przy zakładaniu programu)", classes="section-title")
+        yield form_row("", Checkbox("Tryb stanów początkowych: korekty sald, istniejące lokaty i kredyty bez wpisów "
+                                    "w historii", id="chk-opening"), classes="checkbox-row")
+        yield form_row("", Button("USTAW SALDA KONT I CELÓW…", id="btn-opening", classes="btn-inline"))
+
         yield Label("SYNCHRONIZACJA Z TELEFONEM (OneDrive)", classes="section-title")
         yield form_row("Stan:", Label("", id="set-sync-status", classes="row-value"))
         yield form_row("", Button("USTAW SYNCHRONIZACJĘ", id="btn-sync-setup", classes="btn-inline"))
@@ -92,6 +97,9 @@ class SettingsView(ViewMixin, VerticalScroll):
             self.query_one("#chk-skip-delete", Checkbox).value = get_setting("skip_delete_confirm") == "1"
             self.query_one("#chk-dev-mode", Checkbox).value = get_setting("dev_mode") == "1"
             self.query_one("#chk-animations", Checkbox).value = get_setting("ui_animations", "1") == "1"
+            from src.finance.accounts import opening_mode
+
+            self.query_one("#chk-opening", Checkbox).value = opening_mode()
             self.query_one("#set-theme", Select).value = get_setting("ui_theme", "matrix")
         self._refresh_security()
         self._refresh_sync()
@@ -147,6 +155,13 @@ class SettingsView(ViewMixin, VerticalScroll):
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         event.stop()
+        if event.checkbox.id == "chk-opening":
+            from src.finance.accounts import set_opening_mode
+
+            set_opening_mode(bool(event.value))
+            self.post_message(DataChanged("Tryb stanów początkowych: " + ("WŁĄCZONY — zmiany sald bez historii"
+                                                                         if event.value else "wyłączony")))
+            return
         key = {"chk-dev-mode": "dev_mode", "chk-skip-delete": "skip_delete_confirm",
                "chk-animations": "ui_animations"}.get(event.checkbox.id or "")
         if not key:
@@ -175,6 +190,7 @@ class SettingsView(ViewMixin, VerticalScroll):
             "btn-import": self._import,
             "btn-print": self._print,
             "btn-sync-setup": self._sync_setup,
+            "btn-opening": self._opening,
             "btn-sync-now": self._sync_now,
             "btn-delete-user": self._delete_user,
             "btn-reset-db": self._reset,
@@ -192,6 +208,11 @@ class SettingsView(ViewMixin, VerticalScroll):
             return
         set_active_month_str(f"{y}-{m}")
         self.post_message(DataChanged(f"Miesiąc roboczy: {y}-{m}"))
+
+    def _opening(self) -> None:
+        from src.screens.modals import OpeningBalancesDialog
+
+        self.open_dialog(OpeningBalancesDialog())
 
     def _sync_setup(self) -> None:
         from src.screens.modals import SyncSettingsDialog

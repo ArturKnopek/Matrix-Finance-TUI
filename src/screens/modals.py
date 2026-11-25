@@ -66,6 +66,8 @@ HELP_SECTIONS = [
         ("K", "korekta: saldo konta · stan koperty · stan celu"),
         ("M", "Koperty: przesuń środki do innej koperty"),
         ("W / A / O", "Konta: wycena lub odsetki / auto-oszczędzanie / wpłata zewnętrzna"),
+        ("Kredyt / raty", "Konta → ^N → Zobowiązania: raty księgują się same; + nadpłata, K ile zostało"),
+        ("Własne konto", "Konta → ^N → Rodzaj „Własny rodzaj”: nazwa, grupa i właściwości do wyboru"),
         ("Ctrl+P", "pauza zlecenia / reguły"),
         ("Ctrl+R", "odśwież, zaksięguj zlecenia i rozlicz lokaty"),
         ("Ctrl+Y", "synchronizuj z telefonem (OneDrive)"),
@@ -286,6 +288,61 @@ class EncryptionDialog(FormDialog):
         vault.disable()
         self.app.vault = None
         return {"message": "Szyfrowanie wyłączone."}
+
+
+# =============================================================================
+# Stan początkowy (bez historii)
+# =============================================================================
+
+class OpeningBalancesDialog(FormDialog):
+    """Salda wszystkich kont i stany celów naraz — bez wpisów w historii i bez wpływu na budżet."""
+
+    WIDE = True
+    SAVE_LABEL = "ZAPISZ STANY"
+
+    def __init__(self) -> None:
+        from src.finance import accounts as acc_api
+        from src.finance import goals as goals_api
+
+        super().__init__("STAN POCZĄTKOWY — SALDA BEZ HISTORII")
+        self.accounts = [a for a in acc_api.get_accounts_overview() if not a["kind"].has_term]
+        self.goals = list(goals_api.get_all_piggy_banks())
+
+    def compose_body(self) -> Iterable[Widget]:
+        from src.ui.forms import amount_input
+
+        yield Label("Wpisz stany z banku / portfela na dziś. Zmiany NIE trafiają do historii transakcji ani do "
+                    "budżetu (bez korekt i przelewów). Lokaty dodasz w Kontach (^N → „lokata już założona”), "
+                    "kredyty i raty — w Kontach (^N → Zobowiązania).", classes="dialog-note")
+        yield Label("KONTA", classes="section-title")
+        for i, a in enumerate(self.accounts):
+            debt = a["kind"].liability
+            value = -a["balance"] if debt else a["balance"]
+            label = f"{a['name'][:18]}{' (dług)' if debt else ''}:"
+            yield form_row(label, amount_input(f"ob-acc-{i}", "0,00", f"{value:.2f}"))
+        if self.goals:
+            yield Label("CELE", classes="section-title")
+            for i, g in enumerate(self.goals):
+                yield form_row(f"{g['name'][:18]}:", amount_input(f"ob-goal-{i}", "0,00",
+                                                                  f"{float(g['current_amount'] or 0):.2f}"))
+
+    def submit_form(self) -> Any:
+        from src.finance import accounts as acc_api
+        from src.utils.parsing import parse_amount
+
+        balances, goals = {}, {}
+        for i, a in enumerate(self.accounts):
+            value = parse_amount(self.query_one(f"#ob-acc-{i}", Input).value or "0")
+            if value is None:
+                raise FormError(f"Niepoprawna kwota: {a['name']}", f"ob-acc-{i}")
+            balances[a["name"]] = -abs(value) if a["kind"].liability else value
+        for i, g in enumerate(self.goals):
+            value = parse_amount(self.query_one(f"#ob-goal-{i}", Input).value or "0")
+            if value is None or value < 0:
+                raise FormError(f"Niepoprawny stan celu: {g['name']}", f"ob-goal-{i}")
+            goals[int(g["id"])] = value
+        changed = acc_api.set_opening_balances(balances, goals)
+        return {"message": f"Ustawiono stany początkowe ({changed} zmian) — bez wpisów w historii."}
 
 
 # =============================================================================

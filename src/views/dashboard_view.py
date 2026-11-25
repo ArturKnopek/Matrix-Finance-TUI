@@ -222,7 +222,7 @@ class DashboardView(WidthClassesMixin, ViewMixin, VerticalScroll):
         cont = self.query_one("#list-assets", Vertical)
         cont.remove_children()
         nw = get_net_worth()
-        total = nw["total"] or 1.0
+        assets = sum(max(0.0, nw.get(g, 0.0)) for g in [*KIND_GROUPS, "goals"]) or 1.0
         rows = []
         for group in [*KIND_GROUPS, "goals"]:
             value = nw.get(group, 0.0)
@@ -230,8 +230,10 @@ class DashboardView(WidthClassesMixin, ViewMixin, VerticalScroll):
                 continue
             name = Label(f"• {'Cele' if group == 'goals' else group}", classes="row-name")
             name.styles.width = 15
-            rows.append(Horizontal(name, Meter(value / total * 100, "share"),
-                                   Label(money(value, ""), classes="row-amount"), classes="card-row"))
+            amount = Label(money(value, ""), classes="row-amount")
+            if value < 0:
+                amount.add_class("-neg")
+            rows.append(Horizontal(name, Meter(abs(value) / assets * 100, "share"), amount, classes="card-row"))
         if not rows:
             rows.append(Label("Brak kont.", classes="dim-text"))
         cont.mount_all(rows)
