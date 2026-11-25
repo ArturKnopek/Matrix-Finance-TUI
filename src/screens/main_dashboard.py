@@ -263,6 +263,9 @@ class MainDashboard(Screen):
             btn = self.query_one(f"#{btn_id}", Button)
             label = footer_label(action, mode)
             if force or btn.label.plain != label.plain:
+                # Textual porównuje etykiety tylko po tekście (bez kolorów) — przy zmianie motywu ta sama
+                # treść w innych kolorach nie odświeżyłaby przycisku, więc najpierw czyścimy etykietę.
+                btn.label = ""
                 btn.label = label
                 btn.refresh(layout=True)
                 changed = True
@@ -270,7 +273,8 @@ class MainDashboard(Screen):
             self.query_one("#footer").refresh(layout=True)
 
     def refresh_theme(self) -> None:
-        """Po zmianie motywu: kolory rysowane w Pythonie (stopka, nagłówek, widoki)."""
+        """Po zmianie motywu: kolory rysowane w Pythonie (stopka, nagłówek, widoki).
+        Stopka innych zakładek odświeża się przy przejściu na nie (_update_footer -> _fit_footer(force=True))."""
         self._fit_footer(force=True)
         self._update_header()
         self.refresh_all_views()

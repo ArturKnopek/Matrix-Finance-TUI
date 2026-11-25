@@ -519,6 +519,36 @@ def test_layout_fits_terminal(user_db, size):
 
 # --------------------------------------------------------------------------- ustawienia / raporty
 
+def test_theme_switch_leaves_no_old_colors(user_db):
+    """Regresja: po zmianie motywu stopka innych zakładek zostawała w kolorach poprzedniego motywu."""
+    import re
+
+    from src.ui.theme import THEMES
+
+    db = user_db
+    storage.set_setting("ui_theme", "matrix")
+    old = {c.lower() for c in (THEMES["matrix"].accent, THEMES["matrix"].accent_mid, THEMES["matrix"].accent_dim)}
+    found = {}
+
+    async def scenario():
+        app = _app()
+        async with app.run_test(size=(120, 36)) as pilot:
+            await _open_dashboard(app, pilot, db)
+            await pilot.press("9")
+            await pilot.pause(0.3)
+            app.screen.query_one("#set-theme").value = "amber"
+            await pilot.pause(0.5)
+            for key in "12345678":
+                await pilot.press(key)
+                await pilot.pause(0.4)
+                colors = {c.lower() for c in re.findall(r"#[0-9a-fA-F]{6}", app.export_screenshot())}
+                found[key] = sorted(colors & old)
+
+    run(scenario())
+    storage.set_setting("ui_theme", "matrix")
+    assert all(not v for v in found.values()), found
+
+
 def test_theme_switch_applies_immediately(user_db):
     db = user_db
     from src.ui.theme import palette
