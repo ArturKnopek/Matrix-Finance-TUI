@@ -38,6 +38,9 @@ SUBTYPE_LABELS = {
     "external_in": "Wpłata zewnętrzna",
     "correction_up": "Korekta salda (+)",
     "correction_down": "Korekta salda (−)",
+    "loan_repay_in": "Spłata raty",
+    "loan_open_out": "Zaciągnięcie kredytu / zakup na raty",
+    "loan_funds_in": "Wypłata kredytu",
 }
 
 _EMPTY_CATEGORY_VALUES = {"", "---", "CLEAR", "Select.BLANK", "None"}
@@ -223,7 +226,7 @@ def delete_transaction(t_id: int) -> int:
         if not row:
             return 0
         group = row["linked_group_id"]
-        if group and row["type"] == TRANSFER:
+        if group and (row["type"] == TRANSFER or str(group).startswith("loan-")):  # przelew / rata: cała grupa
             rows = conn.execute("SELECT * FROM transactions WHERE linked_group_id = ?", (group,)).fetchall()
         else:
             rows = [row]
@@ -243,6 +246,8 @@ def update_transaction(t_id: int, date: str, t_type: str, category: str, account
             return
         if old["type"] == TRANSFER:
             raise ValueError("Przelewów i operacji na celach nie edytuje się — usuń wpis i utwórz go ponownie.")
+        if str(old["linked_group_id"] or "").startswith("loan-"):
+            raise ValueError("Raty kredytu nie edytuje się — zmień ratę w ustawieniach kredytu (Konta → ^E).")
         account = require_account(conn, account)
         category = normalize_category(conn, category)
         new_amount = abs(float(amount or 0.0))

@@ -211,9 +211,12 @@ def occurrences_in_month(row: Any, ym: str) -> List[date]:
 
 
 def check_due_payments_count(today: Optional[date] = None) -> int:
+    """Zaległe terminy: zlecenia stałe + raty kredytów/zakupów na raty."""
+    from src.finance.loans import due_installments_count
+
     with open_user_db() as conn:
         rows = conn.execute("SELECT * FROM recurring_payments WHERE is_registered = 1").fetchall()
-    return sum(len(get_recurring_due_dates(row, today)) for row in rows)
+    return sum(len(get_recurring_due_dates(row, today)) for row in rows) + due_installments_count(today)
 
 
 def get_upcoming_recurring(limit: int = 20, today: Optional[date] = None) -> List[Dict[str, Any]]:
@@ -229,6 +232,9 @@ def get_upcoming_recurring(limit: int = 20, today: Optional[date] = None) -> Lis
         r["next_due"] = nxt
         r["days"] = (nxt - today).days
         out.append(r)
+    from src.finance.loans import upcoming_installments
+
+    out += upcoming_installments(today)  # raty kredytów i zakupów na raty
     out.sort(key=lambda x: (x["days"], x.get("name") or ""))
     return out[:limit]
 
@@ -298,10 +304,15 @@ def check_and_process_recurring(today: Optional[date] = None) -> int:
                     processed += 1
                 conn.execute("UPDATE recurring_payments SET last_payment_date = ? WHERE id = ?",
                              (due_dates[-1].isoformat(), row["id"]))
-        return processed
     except Exception as e:
         log.error("Błąd przetwarzania zleceń cyklicznych: %s", e)
-        return 0
+    try:
+        from src.finance.loans import process_due_installments
+
+        processed += process_due_installments(today)
+    except Exception as e:
+        log.error("Błąd księgowania rat: %s", e)
+    return processed
 
 
 process_due_payments = check_and_process_recurring

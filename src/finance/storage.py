@@ -25,7 +25,7 @@ PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
 
 AUTH_DB = str(PROJECT_ROOT / "auth.db")
 DATA_DIR = PROJECT_ROOT / "data"
-USER_SCHEMA_VERSION = 3
+USER_SCHEMA_VERSION = 4
 
 DEFAULT_CATEGORIES: Tuple[str, ...] = (
     "Jedzenie", "Transport", "Rachunki", "Zdrowie", "Rozrywka", "Zakupy", "Wynagrodzenie", "Inne",
@@ -481,6 +481,13 @@ def ensure_user_schema(conn: sqlite3.Connection, start_card: float = 0.0, start_
         ("yearly_limit", "REAL NOT NULL DEFAULT 0"),
         ("notes", "TEXT"),
         ("closed_at", "TEXT"),
+        # wersja 4: własne rodzaje kont, kredyty i raty
+        ("custom_label", "TEXT"),
+        ("custom_group", "TEXT"),
+        ("custom_flags", "TEXT"),
+        ("loan_installment", "REAL NOT NULL DEFAULT 0"),
+        ("loan_category", "TEXT"),
+        ("loan_first_due", "TEXT"),
     ):
         ensure_column(conn, "accounts", column, ddl)
 

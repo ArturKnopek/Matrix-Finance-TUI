@@ -48,6 +48,8 @@ class AccountKind:
     has_term: bool = False  # termin zapadalności (lokata, obligacje)
     valuation: bool = False  # wartość zmienia się wyceną (inwestycje)
     retirement: bool = False  # limity roczne wpłat (IKE/IKZE)
+    liability: bool = False  # zobowiązanie (kredyt, raty): saldo ujemne = dług
+    custom: bool = False  # rodzaj skonfigurowany ręcznie przez użytkownika
 
 
 ACCOUNT_KINDS: Dict[str, AccountKind] = {
@@ -63,9 +65,20 @@ ACCOUNT_KINDS: Dict[str, AccountKind] = {
         AccountKind("ike", "IKE", "Emerytalne", liquid=False, valuation=True, retirement=True),
         AccountKind("ikze", "IKZE", "Emerytalne", liquid=False, valuation=True, retirement=True),
         AccountKind("ppk", "PPK", "Emerytalne", liquid=False, valuation=True, retirement=True),
+        AccountKind("loan", "Kredyt / pożyczka", "Zobowiązania", liquid=False, has_rate=True, liability=True),
+        AccountKind("installments", "Zakup na raty", "Zobowiązania", liquid=False, has_rate=True, liability=True),
+        AccountKind("custom", "Własny rodzaj (konfiguracja ręczna)", "Inwestycje", custom=True),
     )
 }
-KIND_GROUPS = ["Codzienne", "Oszczędności", "Inwestycje", "Emerytalne"]
+KIND_GROUPS = ["Codzienne", "Oszczędności", "Inwestycje", "Emerytalne", "Zobowiązania"]
+LOAN_KINDS = ("loan", "installments")
+# przełączniki rodzaju własnego (kolumna custom_flags, rozdzielone przecinkami)
+CUSTOM_FLAGS = {
+    "liquid": "Środki dostępne na co dzień (płatności z tego konta)",
+    "rate": "Oprocentowanie (dopisywanie odsetek)",
+    "valuation": "Wartość zmienia się — wycena ręczna (W)",
+    "limit": "Roczny limit wpłat (jak IKE/IKZE)",
+}
 INSTITUTIONS = ["Revolut", "PKO BP", "mBank", "ING", "Santander", "Pekao", "Millennium", "Alior", "BNP Paribas",
                 "Credit Agricole", "VeloBank", "Nest Bank", "XTB", "Finax", "inPZU", "Obligacje skarbowe (PKO)"]
 DEFAULT_TAX_RATE = 19.0  # podatek od zysków kapitałowych („podatek Belki”)
@@ -73,6 +86,26 @@ DEFAULT_TAX_RATE = 19.0  # podatek od zysków kapitałowych („podatek Belki”
 
 def kind_info(code: Optional[str]) -> AccountKind:
     return ACCOUNT_KINDS.get(code or "checking", ACCOUNT_KINDS["checking"])
+
+
+def parse_flags(value: Any) -> set:
+    return {f.strip() for f in str(value or "").split(",") if f.strip()}
+
+
+def custom_kind(label: Optional[str], group: Optional[str], flags: Any) -> AccountKind:
+    f = parse_flags(flags)
+    group = group if group in KIND_GROUPS else "Inwestycje"
+    return AccountKind("custom", (label or "").strip() or "Własny rodzaj", group, liquid="liquid" in f,
+                       has_rate="rate" in f, valuation="valuation" in f, retirement="limit" in f,
+                       liability=group == "Zobowiązania", custom=True)
+
+
+def account_info(row: Any) -> AccountKind:
+    """Właściwości konkretnego konta (dla rodzaju własnego — z jego konfiguracji)."""
+    r = dict(row) if row is not None else {}
+    if r.get("account_kind") == "custom":
+        return custom_kind(r.get("custom_label"), r.get("custom_group"), r.get("custom_flags"))
+    return kind_info(r.get("account_kind"))
 
 
 def kind_options() -> List[Tuple[str, str]]:
@@ -99,7 +132,7 @@ def get_account(name: str):
 
 def get_account_names(active_only: bool = True, liquid_only: bool = False) -> List[str]:
     rows = get_all_accounts_data(active_only=active_only)
-    return [r["name"] for r in rows if not liquid_only or kind_info(r["account_kind"]).liquid]
+    return [r["name"] for r in rows if not liquid_only or account_info(r).liquid]
 
 
 def get_account_options(active_only: bool = True, liquid_only: bool = False,
@@ -107,7 +140,7 @@ def get_account_options(active_only: bool = True, liquid_only: bool = False,
     rows = get_all_accounts_data(active_only=active_only)
     out: List[Tuple[str, str]] = []
     for r in rows:
-        if liquid_only and not kind_info(r["account_kind"]).liquid:
+        if liquid_only and not account_info(r).liquid:
             continue
         label = r["name"]
         if r["currency"] and r["currency"] != "PLN":
@@ -129,16 +162,20 @@ def update_account_balance(account_name: str, amount_change: float) -> None:
 
 
 def set_account_balance(account_name: str, new_balance: float, note: str = "Korekta salda",
-                        day: Optional[str] = None, tx_uid: Optional[str] = None) -> float:
+                        day: Optional[str] = None, tx_uid: Optional[str] = None, record: bool = True) -> float:
     """
     Korekta salda: ustawia rzeczywiste saldo konta, zapisując różnicę jako wpis
     „Korekta salda (+/−)” (Transfer — nie jest wydatkiem ani dochodem, nie zmienia budżetu).
+    record=False: stan początkowy — saldo ustawiane bez wpisu w historii.
     Zwraca różnicę.
     """
     with open_user_db(write=True) as conn:
         require_account(conn, account_name)
         diff = round(float(new_balance) - account_balance_in(conn, account_name), 2)
-        if diff:
+        if diff and not record:
+            conn.execute("UPDATE accounts SET balance = ?, updated_at = ? WHERE name = ?",
+                         (round(float(new_balance), 2), now_iso(), account_name))
+        elif diff:
             post_entry(conn, day or date.today().isoformat(), TRANSFER, None, account_name,
                        note or "Korekta salda", abs(diff), "[KOREKTA] ręczna zmiana salda",
                        subtype="correction_up" if diff > 0 else "correction_down", tx_uid=tx_uid)
@@ -166,6 +203,9 @@ def add_account(
     term_months: Optional[int] = None,
     linked_account: Optional[str] = None,
     auto_renew: bool = False,
+    custom_label: Optional[str] = None,
+    custom_group: Optional[str] = None,
+    custom_flags: Optional[str] = None,
 ) -> Tuple[bool, str]:
     name = (name or "").strip()
     if not name:
@@ -182,14 +222,15 @@ def add_account(
                     (name, balance, currency, account_kind, sort_order, is_active, include_in_reports,
                      include_in_net_worth, created_at, updated_at, institution, interest_rate, tax_rate,
                      yearly_limit, notes, opened_at, maturity_date, term_months, principal, linked_account,
-                     auto_renew)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     auto_renew, custom_label, custom_group, custom_flags)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (name, float(opening_balance or 0.0), (currency or "PLN").upper(), account_kind, int(next_order),
                  1 if include_in_reports else 0, 1 if include_in_net_worth else 0, stamp, stamp,
                  (institution or "").strip() or None, float(interest_rate or 0.0), float(tax_rate),
                  float(yearly_limit or 0.0), notes, opened_at, maturity_date, term_months,
-                 float(opening_balance or 0.0), linked_account, 1 if auto_renew else 0),
+                 float(opening_balance or 0.0), linked_account, 1 if auto_renew else 0,
+                 (custom_label or "").strip() or None, custom_group, custom_flags),
             )
         return True, ""
     except sqlite3.IntegrityError:
@@ -199,7 +240,9 @@ def add_account(
 
 
 _EDITABLE = {"account_kind", "institution", "interest_rate", "tax_rate", "yearly_limit", "notes", "linked_account",
-             "auto_renew", "include_in_net_worth", "include_in_reports", "maturity_date", "currency"}
+             "auto_renew", "include_in_net_worth", "include_in_reports", "maturity_date", "currency",
+             "custom_label", "custom_group", "custom_flags", "loan_installment", "loan_category", "loan_first_due",
+             "term_months", "principal"}
 
 
 def update_account(name: str, new_name: Optional[str] = None, **fields: Any) -> Tuple[bool, str]:
@@ -354,11 +397,15 @@ def interest_for_period(principal: float, rate_pct: float, start: date, end: dat
     return gross, tax, round(gross - tax, 2)
 
 
-def open_term_deposit(name: str, source_account: str, amount: float, interest_rate: float, term_months: int,
-                      start_date: Optional[str] = None, institution: Optional[str] = None,
-                      kind: str = "deposit", auto_renew: bool = False,
-                      tax_rate: float = DEFAULT_TAX_RATE) -> Tuple[bool, str]:
-    """Zakłada lokatę/obligacje: nowe konto + przelew z konta źródłowego."""
+def open_term_deposit(name: str, source_account: Optional[str], amount: float, interest_rate: float,
+                      term_months: int, start_date: Optional[str] = None, institution: Optional[str] = None,
+                      kind: str = "deposit", auto_renew: bool = False, tax_rate: float = DEFAULT_TAX_RATE,
+                      return_to: Optional[str] = None) -> Tuple[bool, str]:
+    """
+    Zakłada lokatę/obligacje: nowe konto + przelew z konta źródłowego.
+    source_account=None: lokata już istniejąca (stan początkowy) — kapitał bez przelewu i bez wpisów;
+    środki po terminie wrócą na `return_to`.
+    """
     if kind not in ("deposit", "bonds"):
         return False, "Rodzaj musi być lokatą albo obligacjami."
     if amount <= 0 or term_months <= 0:
@@ -367,9 +414,15 @@ def open_term_deposit(name: str, source_account: str, amount: float, interest_ra
     maturity = add_months(start, int(term_months))
     ok, msg = add_account(name, 0.0, account_kind=kind, institution=institution, interest_rate=interest_rate,
                           tax_rate=tax_rate, opened_at=start.isoformat(), maturity_date=maturity.isoformat(),
-                          term_months=int(term_months), linked_account=source_account, auto_renew=auto_renew)
+                          term_months=int(term_months), linked_account=source_account or return_to,
+                          auto_renew=auto_renew)
     if not ok:
         return ok, msg
+    if not source_account:  # istniejąca lokata: tylko stan, bez historii
+        with open_user_db(write=True) as conn:
+            conn.execute("UPDATE accounts SET balance = ?, principal = ? WHERE name = ?",
+                         (round(float(amount), 2), round(float(amount), 2), name))
+        return True, ""
     try:
         with open_user_db(write=True) as conn:
             _transfer(conn, source_account, name, amount, start.isoformat(),
@@ -385,7 +438,7 @@ def open_term_deposit(name: str, source_account: str, amount: float, interest_ra
 def deposit_projection(acc: Any, today: Optional[date] = None) -> Optional[Dict[str, Any]]:
     """Prognoza dla lokaty/obligacji: postęp okresu, odsetki narosłe i na koniec okresu (netto)."""
     a = dict(acc)
-    if not kind_info(a.get("account_kind")).has_term:
+    if not account_info(a).has_term:
         return None
     start, end = _parse(a.get("opened_at")), _parse(a.get("maturity_date"))
     if not start or not end:
@@ -473,7 +526,7 @@ def break_term_deposit(name: str, today: Optional[date] = None) -> Tuple[bool, s
     """Zerwanie lokaty przed terminem: kapitał wraca na konto powiązane bez odsetek."""
     today = today or date.today()
     acc = get_account(name)
-    if not acc or not kind_info(acc["account_kind"]).has_term:
+    if not acc or not account_info(acc).has_term:
         return False, "To nie jest lokata ani obligacje."
     target = acc["linked_account"]
     if not target:
@@ -495,7 +548,7 @@ def get_accounts_overview(active_only: bool = True) -> List[Dict[str, Any]]:
     today = date.today()
     for row in get_all_accounts_data(active_only=active_only):
         r = dict(row)
-        info = kind_info(r.get("account_kind"))
+        info = account_info(r)
         r["balance"] = float(r.get("balance") or 0.0)
         r["kind"] = info
         r["kind_label"] = info.label
@@ -506,9 +559,13 @@ def get_accounts_overview(active_only: bool = True) -> List[Dict[str, Any]]:
         r["projection"] = deposit_projection(r, today)
         if info.retirement:
             r["contributed_this_year"] = contributions_in_year(r["name"], today.year)
-        if info.has_rate and not info.has_term and r.get("interest_rate") and r["balance"] > 0:
+        if info.has_rate and not info.has_term and not info.liability and r.get("interest_rate") and r["balance"] > 0:
             rate, tax = float(r["interest_rate"]), float(r.get("tax_rate") or 0.0)
             r["monthly_interest_net"] = round(r["balance"] * rate / 100 / 12 * (1 - tax / 100), 2)
+        if info.liability:
+            from src.finance.loans import loan_status
+
+            r["loan"] = loan_status(r, today)
         out.append(r)
     return out
 
@@ -519,11 +576,54 @@ def get_net_worth() -> Dict[str, float]:
 
     groups = {g: 0.0 for g in KIND_GROUPS}
     liquid = 0.0
+    debt = 0.0
     for acc in get_accounts_overview(active_only=True):
         if not acc["include_in_net_worth"]:
             continue
         groups[acc["group"]] = groups.get(acc["group"], 0.0) + acc["balance"]
-        if acc["liquid"]:
+        if acc["liquid"] and not acc["kind"].liability:
             liquid += acc["balance"]
+        if acc["kind"].liability and acc["balance"] < 0:
+            debt += -acc["balance"]
     goals = get_piggy_total()
-    return {**groups, "liquid": liquid, "goals": goals, "total": sum(groups.values()) + goals}
+    return {**groups, "liquid": liquid, "goals": goals, "debt": debt, "total": sum(groups.values()) + goals}
+
+
+# =============================================================================
+# Stan początkowy (bez historii)
+# =============================================================================
+
+OPENING_MODE_KEY = "local_opening_mode"
+
+
+def opening_mode() -> bool:
+    """Tryb stanów początkowych: korekty sald i zakładanie istniejących lokat/kredytów bez wpisów w historii."""
+    from src.finance.storage import get_user_setting
+
+    try:
+        return get_user_setting(OPENING_MODE_KEY, "0") == "1"
+    except Exception:
+        return False
+
+
+def set_opening_mode(enabled: bool) -> None:
+    from src.finance.storage import set_user_setting
+
+    set_user_setting(OPENING_MODE_KEY, "1" if enabled else "0")
+
+
+def set_opening_balances(balances: Dict[str, float], goal_amounts: Optional[Dict[int, float]] = None) -> int:
+    """Ustawia salda kont i stany celów bez żadnych wpisów w historii. Zwraca liczbę zmian."""
+    changed = 0
+    with open_user_db(write=True) as conn:
+        for name, value in balances.items():
+            cur = conn.execute("UPDATE accounts SET balance = ?, updated_at = ? WHERE name = ? AND "
+                               "ROUND(balance, 2) != ROUND(?, 2)", (round(float(value), 2), now_iso(), name, value))
+            changed += cur.rowcount
+        for g_id, value in (goal_amounts or {}).items():
+            if float(value) < 0:
+                raise ValueError("Stan celu nie może być ujemny.")
+            cur = conn.execute("UPDATE piggy_banks SET current_amount = ? WHERE id = ? AND "
+                               "ROUND(current_amount, 2) != ROUND(?, 2)", (round(float(value), 2), int(g_id), value))
+            changed += cur.rowcount
+    return changed

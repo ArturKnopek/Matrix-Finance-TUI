@@ -221,7 +221,7 @@ class SearchHit:
 
 
 def search_everything(query: str, limit: int = 40) -> List[SearchHit]:
-    from src.finance.accounts import get_all_accounts_data, kind_info
+    from src.finance.accounts import account_info, get_all_accounts_data
     from src.finance.envelopes import get_all_categories_data
     from src.finance.goals import get_all_piggy_banks
     from src.finance.ledger import describe_entry, fetch_transactions
@@ -236,9 +236,9 @@ def search_everything(query: str, limit: int = 40) -> List[SearchHit]:
         return any(q in str(v or "").lower() for v in values)
 
     for acc in get_all_accounts_data():
-        if match(acc["name"], acc["institution"], kind_info(acc["account_kind"]).label):
+        if match(acc["name"], acc["institution"], account_info(acc).label):
             hits.append(SearchHit("account", acc["name"], acc["name"],
-                                  f"{kind_info(acc['account_kind']).label} · {float(acc['balance']):,.2f} zł"
+                                  f"{account_info(acc).label} · {float(acc['balance']):,.2f} zł"
                                   .replace(",", " ")))
     for cat in get_all_categories_data():
         if match(cat["name"], cat["ct_code"]):
