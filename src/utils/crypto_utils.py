@@ -27,10 +27,36 @@ SALT_SIZE = 16
 KDF_ITERATIONS = 200_000
 
 
+def _pbkdf2_sha256(password: bytes, salt: bytes, iterations: int, dklen: int = 32) -> bytes:
+    """PBKDF2-HMAC-SHA256 w czystym Pythonie (gdy hashlib nie ma pbkdf2_hmac — np. przeglądarka/Pyodide)."""
+    import hmac
+
+    inner = hmac.new(password, digestmod=hashlib.sha256)
+    out = b""
+    block = 1
+    while len(out) < dklen:
+        mac = inner.copy()
+        mac.update(salt + block.to_bytes(4, "big"))
+        u = mac.digest()
+        acc = int.from_bytes(u, "big")
+        for _ in range(iterations - 1):
+            mac = inner.copy()
+            mac.update(u)
+            u = mac.digest()
+            acc ^= int.from_bytes(u, "big")
+        out += acc.to_bytes(32, "big")
+        block += 1
+    return out[:dklen]
+
+
 def derive_key(password: str, salt: bytes) -> bytes:
     """PBKDF2-HMAC-SHA256 (200 000 iteracji) -> 32 B klucza w base64url (format Fernet)."""
-    return base64.urlsafe_b64encode(hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt,
-                                                        KDF_ITERATIONS, dklen=32))
+    raw = password.encode("utf-8")
+    if hasattr(hashlib, "pbkdf2_hmac"):
+        key = hashlib.pbkdf2_hmac("sha256", raw, salt, KDF_ITERATIONS, dklen=32)
+    else:
+        key = _pbkdf2_sha256(raw, salt, KDF_ITERATIONS, 32)
+    return base64.urlsafe_b64encode(key)
 
 
 def derive_fernet(password: str, salt: bytes) -> Fernet:

@@ -53,6 +53,17 @@ def test_wrong_key_and_tampering_rejected():
         fernet_compat.Fernet(key).decrypt(base64.urlsafe_b64encode(bytes(raw)))
 
 
+@pytest.mark.parametrize("iterations", [1, 2, 1000])
+def test_pure_python_pbkdf2_matches_hashlib(iterations):
+    import hashlib
+
+    from src.utils.crypto_utils import _pbkdf2_sha256
+
+    salt = os.urandom(16)
+    assert _pbkdf2_sha256("hasło".encode(), salt, iterations) == \
+        hashlib.pbkdf2_hmac("sha256", "hasło".encode(), salt, iterations, 32)
+
+
 def test_kdf_matches_cryptography():
     salt = os.urandom(16)
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=200_000)

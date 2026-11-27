@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import sys
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -79,10 +80,15 @@ def _py_lower(value: Any) -> Any:
     return value.lower() if isinstance(value, str) else value
 
 
+# W przeglądarce (aplikacja webowa na iPhone — Pyodide/WebAssembly) nie ma pamięci współdzielonej wymaganej
+# przez tryb WAL — tam używamy klasycznego dziennika.
+JOURNAL_MODE = "DELETE" if sys.platform == "emscripten" else "WAL"
+
+
 def _configure(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA journal_mode = {JOURNAL_MODE}")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
